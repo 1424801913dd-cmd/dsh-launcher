@@ -345,19 +345,19 @@ fn parse_loopback_url(line: &str) -> Option<String> {
         .split_whitespace()
         .next()?
         .trim_end_matches(|character: char| matches!(character, ')' | ']' | ',' | ';'));
-    if candidate
-        .strip_prefix("http://127.0.0.1:")?
-        .split('/')
-        .next()?
-        .parse::<u16>()
-        .is_err()
-    {
+    let remainder = candidate.strip_prefix("http://127.0.0.1:")?;
+    let authority = remainder.split(['/', '?', '#']).next()?;
+    if authority.parse::<u16>().is_err() {
         return None;
     }
-    Some(if candidate.ends_with('/') {
-        candidate.to_string()
-    } else {
+    let suffix = &remainder[authority.len()..];
+    Some(if suffix.is_empty() {
         format!("{candidate}/")
+    } else if suffix.starts_with('?') || suffix.starts_with('#') {
+        let origin_length = candidate.len() - suffix.len();
+        format!("{}/{}", &candidate[..origin_length], suffix)
+    } else {
+        candidate.to_string()
     })
 }
 
@@ -1774,6 +1774,14 @@ mod tests {
         assert_eq!(
             parse_loopback_url("dsh web: http://127.0.0.1:43123"),
             Some("http://127.0.0.1:43123/".to_string())
+        );
+        assert_eq!(
+            parse_loopback_url("dsh web: http://127.0.0.1:43123/?token=signed-value"),
+            Some("http://127.0.0.1:43123/?token=signed-value".to_string())
+        );
+        assert_eq!(
+            parse_loopback_url("dsh web: http://127.0.0.1:43123?token=signed-value"),
+            Some("http://127.0.0.1:43123/?token=signed-value".to_string())
         );
         assert_eq!(parse_loopback_url("http://localhost:43123"), None);
         assert_eq!(parse_loopback_url("http://127.0.0.1:not-a-port"), None);

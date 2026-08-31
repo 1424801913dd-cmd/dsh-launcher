@@ -678,7 +678,13 @@ where
     fs::create_dir(&staging).map_err(|error| format!("无法创建 DSH_HOME 备份 staging：{error}"))?;
     let mut guard = DirectoryGuard::new(staging.clone());
     let mut entries = 0_u64;
-    copy_tree_safely(dsh_home, &staging, &mut entries, &mut progress)?;
+    copy_tree_safely(
+        dsh_home,
+        &staging,
+        Path::new(""),
+        &mut entries,
+        &mut progress,
+    )?;
     progress(48, "生产 DSH_HOME 备份已同步，正在提交备份…");
     fs::rename(&staging, &destination)
         .map_err(|error| format!("无法提交 DSH_HOME 备份：{error}"))?;
@@ -689,6 +695,7 @@ where
 fn copy_tree_safely<P>(
     source: &Path,
     destination: &Path,
+    relative_source: &Path,
     entries: &mut u64,
     progress: &mut P,
 ) -> Result<(), String>
@@ -702,6 +709,11 @@ where
         if *entries > MAX_BACKUP_ENTRIES {
             return Err("DSH_HOME 条目数异常，已中止备份。".to_string());
         }
+        let relative_entry = relative_source.join(entry.file_name());
+        if is_generated_profile_module_fallback(&relative_entry) {
+            progress(20, "正在跳过可由 Runtime 重建的 profile 模块映射…");
+            continue;
+        }
         let metadata = fs::symlink_metadata(entry.path())
             .map_err(|error| format!("无法检查 DSH_HOME 条目：{error}"))?;
         if is_reparse_or_symlink(&metadata) {
@@ -713,7 +725,7 @@ where
         let target = destination.join(entry.file_name());
         if metadata.is_dir() {
             fs::create_dir(&target).map_err(|error| format!("无法创建备份子目录：{error}"))?;
-            copy_tree_safely(&entry.path(), &target, entries, progress)?;
+            copy_tree_safely(&entry.path(), &target, &relative_entry, entries, progress)?;
         } else if metadata.is_file() {
             fs::copy(entry.path(), &target)
                 .map_err(|error| format!("无法复制 DSH_HOME 文件：{error}"))?;
@@ -725,6 +737,31 @@ where
         }
     }
     Ok(())
+}
+
+fn is_generated_profile_module_fallback(relative: &Path) -> bool {
+    let mut components = relative.components();
+    let Some(Component::Normal(profiles)) = components.next() else {
+        return false;
+    };
+    let Some(Component::Normal(node_modules)) = components.next() else {
+        return false;
+    };
+    if components.next().is_some() {
+        return false;
+    }
+
+    let profiles = profiles.to_string_lossy();
+    let node_modules = node_modules.to_string_lossy();
+    #[cfg(windows)]
+    {
+        profiles.eq_ignore_ascii_case("profiles")
+            && node_modules.eq_ignore_ascii_case("node_modules")
+    }
+    #[cfg(not(windows))]
+    {
+        profiles == "profiles" && node_modules == "node_modules"
+    }
 }
 
 fn enforce_anti_replay(root: &Path, sequence: u64, digest: &str) -> Result<(), String> {
@@ -988,5 +1025,56 @@ mod tests {
         assert!(extract_bundle(&archive_path, &destination).is_err());
         assert!(!root.join("escape.txt").exists());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn backup_excludes_only_generated_profile_module_fallback() {
+        let root =
+            std::env::temp_dir().join(format!("dsh-home-backup-{}", runtime_manager::now_ms()));
+        let home = root.join("home");
+        let cache = root.join("cache");
+        fs::create_dir_all(home.join("profiles/node_modules/@example/generated")).unwrap();
+        fs::create_dir_all(home.join("profiles/web/node_modules/user-plugin")).unwrap();
+        fs::create_dir_all(home.join("sessions")).unwrap();
+        fs::write(home.join("settings.yaml"), b"theme: system\n").unwrap();
+        fs::write(
+            home.join("profiles/node_modules/@example/generated/package.json"),
+            b"{}",
+        )
+        .unwrap();
+        fs::write(
+            home.join("profiles/web/node_modules/user-plugin/package.json"),
+            b"{}",
+        )
+        .unwrap();
+        fs::write(home.join("sessions/session.json"), b"{}").unwrap();
+
+        let backup = backup_dsh_home(&cache, &home, |_, _| {}).unwrap();
+
+        assert_eq!(
+            fs::read(backup.join("settings.yaml")).unwrap(),
+            b"theme: system\n"
+        );
+        assert!(backup.join("sessions/session.json").is_file());
+        assert!(
+            backup
+                .join("profiles/web/node_modules/user-plugin/package.json")
+                .is_file()
+        );
+        assert!(!backup.join("profiles/node_modules").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn generated_profile_module_fallback_match_is_exact() {
+        assert!(is_generated_profile_module_fallback(Path::new(
+            "profiles/node_modules"
+        )));
+        assert!(!is_generated_profile_module_fallback(Path::new(
+            "profiles/web/node_modules"
+        )));
+        assert!(!is_generated_profile_module_fallback(Path::new(
+            "other/node_modules"
+        )));
     }
 }

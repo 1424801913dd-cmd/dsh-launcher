@@ -61,7 +61,10 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path './release-assets' | Out-Null
           gh release download runtime-channels --pattern runtime-manifest.json --dir ./release-assets/previous 2>$null
-          if ($LASTEXITCODE -ne 0) { Write-Output 'No previous channel manifest; creating the first one.' }
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output 'No previous channel manifest; creating the first one.'
+            $global:LASTEXITCODE = 0
+          }
 
       - name: Sign Runtime Bundle and anti-replay manifest
         shell: pwsh

@@ -1,0 +1,16 @@
+{
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": true,
+    "targets": ["nsis"]
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": ["https://example.invalid/dsh-launcher/latest.json"],
+      "pubkey": "REPLACE_WITH_TAURI_UPDATER_PUBLIC_KEY",
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

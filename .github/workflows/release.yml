@@ -1,0 +1,117 @@
+name: Signed release
+
+on:
+  workflow_dispatch:
+    inputs:
+      dsh_version:
+        description: Exact DSH version present in compatibility-recipes.json
+        required: true
+        default: 0.1.1-rc.2
+      channel:
+        description: Runtime channel
+        required: true
+        type: choice
+        options:
+          - recommended
+          - alpha
+      manifest_sequence:
+        description: Monotonically increasing signed manifest sequence
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows:
+    runs-on: windows-latest
+    env:
+      CARGO_TERM_COLOR: always
+      DSH_RUNTIME_SIGNING_PRIVATE_KEY: ${{ secrets.DSH_RUNTIME_SIGNING_PRIVATE_KEY }}
+      DSH_RUNTIME_PUBLIC_KEY: ${{ secrets.DSH_RUNTIME_PUBLIC_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      TAURI_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
+      DSH_LAUNCHER_UPDATE_ENABLED: "true"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install locked frontend dependencies
+        run: npm ci
+
+      - name: Build verified Runtime Bundle from pinned recipe
+        shell: pwsh
+        run: >-
+          ./scripts/Build-RuntimeBundle.ps1
+          -DshVersion '${{ inputs.dsh_version }}'
+          -Channel '${{ inputs.channel }}'
+          -OutputDirectory './release-assets'
+
+      - name: Download previous signed channel manifest when present
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force -Path './release-assets' | Out-Null
+          gh release download runtime-channels --pattern runtime-manifest.json --dir ./release-assets/previous 2>$null
+          if ($LASTEXITCODE -ne 0) { Write-Output 'No previous channel manifest; creating the first one.' }
+
+      - name: Sign Runtime Bundle and anti-replay manifest
+        shell: pwsh
+        run: |
+          $version = '${{ inputs.dsh_version }}'
+          $asset = "dsh-$version-windows-x86_64.runtime.zip"
+          $base = "https://github.com/${{ github.repository }}/releases/download/runtime-channels"
+          node ./scripts/sign-runtime-release.mjs sign `
+            --bundle "./release-assets/$asset" `
+            --metadata "./release-assets/dsh-$version-windows-x86_64.runtime-bundle.json" `
+            --bundle-url "$base/$asset" `
+            --manifest-url "$base/runtime-manifest.json" `
+            --manifest-output './release-assets/runtime-manifest.json' `
+            --existing-manifest './release-assets/previous/runtime-manifest.json' `
+            --config-output './src-tauri/resources/runtime-update-config.json' `
+            --key-id 'runtime-release-v1' `
+            --sequence '${{ inputs.manifest_sequence }}'
+
+      - name: Prepare Tauri signed updater configuration
+        shell: pwsh
+        env:
+          DSH_LAUNCHER_UPDATE_ENDPOINT: https://github.com/${{ github.repository }}/releases/latest/download/latest.json
+        run: node ./scripts/prepare-tauri-release-config.mjs
+
+      - name: Run checks
+        shell: pwsh
+        run: |
+          npm run build
+          cargo test --manifest-path ./src-tauri/Cargo.toml
+
+      - name: Build and publish signed launcher updater
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          tagName: app-v__VERSION__
+          releaseName: DSH Launcher v__VERSION__
+          releaseDraft: true
+          prerelease: false
+          args: --config src-tauri/tauri.release.conf.json
+
+      - name: Publish Runtime channel assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = '${{ inputs.dsh_version }}'
+          $asset = "./release-assets/dsh-$version-windows-x86_64.runtime.zip"
+          gh release view runtime-channels 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create runtime-channels --title 'DSH Runtime signed channels' --notes 'Machine-consumed signed Runtime assets.' --latest=false
+          }
+          gh release upload runtime-channels $asset './release-assets/runtime-manifest.json' --clobber

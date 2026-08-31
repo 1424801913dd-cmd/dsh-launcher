@@ -72,8 +72,11 @@ try {
         throw "npm install failed with exit code $LASTEXITCODE."
     }
 
-    $lock = Get-Content -Raw -LiteralPath (Join-Path $appRoot 'package-lock.json') -Encoding UTF8 | ConvertFrom-Json
-    $lockedIntegrity = $lock.packages.'node_modules/@deepseek-ai/dsh'.integrity
+    $lockPath = Join-Path $appRoot 'package-lock.json'
+    $lockedIntegrity = (& $nodeExe -e "const fs=require('fs');const lock=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(lock.packages?.['node_modules/@deepseek-ai/dsh']?.integrity ?? '')" $lockPath).Trim()
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($lockedIntegrity)) {
+        throw 'Unable to read the installed DSH integrity from package-lock.json.'
+    }
     if ($lockedIntegrity -ne $recipe.packageIntegrity) {
         throw 'Installed DSH integrity does not match the pinned compatibility recipe.'
     }

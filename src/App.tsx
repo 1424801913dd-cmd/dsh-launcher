@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import type { DshPhase, LauncherSnapshot, RuntimeChannel } from "./types";
 
@@ -91,6 +92,7 @@ export default function App() {
   const [logsExpanded, setLogsExpanded] = useState(true);
   const [launcherUpdateBusy, setLauncherUpdateBusy] = useState(false);
   const [launcherUpdateProgress, setLauncherUpdateProgress] = useState<string | null>(null);
+  const [launcherVersion, setLauncherVersion] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -106,6 +108,12 @@ export default function App() {
     const timer = window.setInterval(() => void refresh(), 1000);
     return () => window.clearInterval(timer);
   }, [refresh]);
+
+  useEffect(() => {
+    void getVersion()
+      .then(setLauncherVersion)
+      .catch(() => setLauncherVersion(null));
+  }, []);
 
   const call = useCallback(
     async (command: string, arguments_?: Record<string, unknown>) => {
@@ -656,7 +664,7 @@ export default function App() {
       </section>
 
       <footer>
-        <span>DSH Launcher 0.3.0</span>
+        <span>DSH Launcher {launcherVersion ?? "—"}</span>
         <span>兼容 DeepSeek Harness · 非官方项目</span>
       </footer>
     </main>

@@ -10,7 +10,6 @@ use std::{
     collections::VecDeque,
     fs::{self, OpenOptions},
     io::{BufRead, BufReader, Read, Write},
-    net::{SocketAddr, TcpStream},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::{Arc, Mutex},
@@ -361,62 +360,62 @@ fn parse_loopback_url(line: &str) -> Option<String> {
     })
 }
 
-fn parse_http_target(url: &str) -> Option<(SocketAddr, String)> {
-    let remainder = url.strip_prefix("http://127.0.0.1:")?;
-    let (authority, path) = remainder
-        .split_once('/')
-        .map(|(authority, path)| (authority, format!("/{path}")))
-        .unwrap_or((remainder, "/".to_string()));
-    let port = authority.parse::<u16>().ok()?;
-    Some((SocketAddr::from(([127, 0, 0, 1], port)), path))
+fn loopback_http_response(url: &str) -> Option<reqwest::blocking::Response> {
+    let mut current = reqwest::Url::parse(url).ok()?;
+    let client = reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_millis(500))
+        .timeout(Duration::from_secs(3))
+        .build()
+        .ok()?;
+    let mut cookies = Vec::<String>::new();
+    for _ in 0..=5 {
+        if current.scheme() != "http"
+            || current.host_str() != Some("127.0.0.1")
+            || current.port().is_none()
+        {
+            return None;
+        }
+        let mut request = client.get(current.clone());
+        if !cookies.is_empty() {
+            request = request.header(reqwest::header::COOKIE, cookies.join("; "));
+        }
+        let response = request.send().ok()?;
+        if !response.status().is_redirection() {
+            return Some(response);
+        }
+        for value in response.headers().get_all(reqwest::header::SET_COOKIE) {
+            let pair = value.to_str().ok()?.split(';').next()?.trim();
+            if !pair.is_empty() {
+                cookies.push(pair.to_string());
+            }
+        }
+        let location = response
+            .headers()
+            .get(reqwest::header::LOCATION)?
+            .to_str()
+            .ok()?;
+        current = current.join(location).ok()?;
+    }
+    None
 }
 
 fn http_health(url: &str) -> bool {
-    let Some((address, path)) = parse_http_target(url) else {
-        return false;
-    };
-    let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_millis(500)) else {
-        return false;
-    };
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(700)));
-    let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
-    let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
-        address.port()
-    );
-    if stream.write_all(request.as_bytes()).is_err() {
-        return false;
-    }
-    let mut response = [0_u8; 64];
-    let Ok(read) = stream.read(&mut response) else {
-        return false;
-    };
-    let status = String::from_utf8_lossy(&response[..read]);
-    status.starts_with("HTTP/1.1 200") || status.starts_with("HTTP/1.0 200")
+    loopback_http_response(url).is_some_and(|response| response.status().is_success())
 }
 
 fn http_page_has_dsh_title(url: &str) -> bool {
-    let Some((address, path)) = parse_http_target(url) else {
+    let Some(response) = loopback_http_response(url) else {
         return false;
     };
-    let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_secs(1)) else {
-        return false;
-    };
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-    let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n",
-        address.port()
-    );
-    if stream.write_all(request.as_bytes()).is_err() {
+    if !response.status().is_success() {
         return false;
     }
-    let mut response = Vec::new();
-    if stream.take(256 * 1024).read_to_end(&mut response).is_err() {
+    let mut body = Vec::new();
+    if response.take(256 * 1024).read_to_end(&mut body).is_err() {
         return false;
     }
-    let response = String::from_utf8_lossy(&response);
-    (response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200"))
-        && response.contains("DeepSeek Harness")
+    String::from_utf8_lossy(&body).contains("DeepSeek Harness")
 }
 
 fn spawn_log_reader<R>(shared: Arc<Mutex<Supervisor>>, reader: R, level: &'static str)
@@ -1785,6 +1784,54 @@ mod tests {
         );
         assert_eq!(parse_loopback_url("http://localhost:43123"), None);
         assert_eq!(parse_loopback_url("http://127.0.0.1:not-a-port"), None);
+    }
+
+    fn redirecting_loopback_server() -> (String, thread::JoinHandle<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let address = listener.local_addr().expect("test server address");
+        let handle = thread::spawn(move || {
+            for index in 0..2 {
+                let (mut stream, _) = listener.accept().expect("accept test request");
+                let mut request = [0_u8; 2048];
+                let read = stream.read(&mut request).expect("read test request");
+                let request = String::from_utf8_lossy(&request[..read]);
+                if index == 0 {
+                    assert!(request.starts_with("GET /?token=test-value HTTP/1.1"));
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 303 See Other\r\nLocation: /\r\nSet-Cookie: dsh_session=ok; Path=/; HttpOnly\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        )
+                        .expect("write redirect response");
+                } else {
+                    assert!(request.starts_with("GET / HTTP/1.1"));
+                    assert!(
+                        request
+                            .to_ascii_lowercase()
+                            .contains("cookie: dsh_session=ok")
+                    );
+                    let body = "<title>DeepSeek Harness</title>";
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    stream
+                        .write_all(response.as_bytes())
+                        .expect("write healthy response");
+                }
+            }
+        });
+        (format!("http://{address}/?token=test-value"), handle)
+    }
+
+    #[test]
+    fn follows_only_loopback_cookie_redirects_for_health_checks() {
+        let (url, server) = redirecting_loopback_server();
+        assert!(http_health(&url));
+        server.join().expect("health server thread");
+
+        let (url, server) = redirecting_loopback_server();
+        assert!(http_page_has_dsh_title(&url));
+        server.join().expect("title server thread");
     }
 
     #[cfg(windows)]

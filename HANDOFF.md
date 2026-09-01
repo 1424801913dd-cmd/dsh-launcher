@@ -1,6 +1,6 @@
 # DeepSeek Harness 启动器交接文档
 
-> 更新日期：2026-08-31
+> 更新日期：2026-09-01
 > 适用系统：Windows 10/11 x64
 > 维护范围：本机 DeepSeek Harness（DSH）运行环境、桌面启动器、用户数据与后续升级
 
@@ -34,14 +34,16 @@
 
 | 项目 | 当前值 |
 | --- | --- |
-| DSH 版本 | `0.1.1-rc.2` |
-| Node.js | `D:\Tools\node-v24.19.0-win-x64\node.exe` |
-| DSH 运行环境 | `D:\Tools\dsh-runtime-0.1.1-rc.2` |
-| DSH CLI 入口 | `D:\Tools\dsh-runtime-0.1.1-rc.2\node_modules\@deepseek-ai\dsh\lib\bin.js` |
+| DSH Launcher | `0.3.3`，安装于 `D:\Bian_CHENG\dsh-launcher\DSH Launcher` |
+| 活动 DSH 版本 | `0.1.2-alpha.2`（签名、受管 Runtime） |
+| 上一 DSH 版本 | `0.1.1-rc.2`（`previous.json`，可回滚） |
+| Node.js | `D:\Tools\dsh-launcher\versions\dsh-0.1.2-alpha.2\node\node.exe`（`24.20.0`） |
+| DSH 运行环境 | `D:\Tools\dsh-launcher\versions\dsh-0.1.2-alpha.2` |
+| DSH CLI 入口 | `D:\Tools\dsh-launcher\versions\dsh-0.1.2-alpha.2\app\node_modules\@deepseek-ai\dsh\lib\bin.js` |
 | 用户数据目录 | `D:\Caches\deepseek-harness\home` |
 | npm 缓存 | `D:\Caches\npm` |
 | 默认工作目录 | `D:\Bian_CHENG\dsmax` |
-| Web 地址 | `http://127.0.0.1:3080/` |
+| Web 地址 | 每次启动使用随机 `127.0.0.1` 端口，并带进程私有访问令牌 |
 | Web profile | `D:\Caches\deepseek-harness\home\profiles\web` |
 
 当前 Web profile 只组合官方的 `@deepseek-ai/dsh-base` 与
@@ -853,3 +855,62 @@ HTTPS 端点与公钥后才会启用。
 在没有用户提供或配置真实仓库、HTTPS 发布端点与两套生产签名密钥之前，不能声称已经完成一次真实签名
 发布或真实在线升级。代码和流水线已就绪，本地构建明确显示“未配置”并拒绝检查，不会回退到 npm 在线
 安装或不签名下载。
+
+## 二十、第三阶段最终验收与第四阶段入口（2026-09-01）
+
+第三阶段已经完成真实公开发布、在线自更新、生产数据备份、Runtime 切换和生产健康检查，不再受第十九节
+“外部发布闸门”限制。第十九节保留为开发过程记录，本节状态为后续维护的当前基线。
+
+### 1. 公开仓库与签名发布
+
+- 公开仓库：`https://github.com/1424801913dd-cmd/dsh-launcher`；
+- 最新公开启动器：`app-v0.3.3`，Release 地址为
+  `https://github.com/1424801913dd-cmd/dsh-launcher/releases/tag/app-v0.3.3`；
+- `0.3.3` 安装包、Tauri updater 签名和 `latest.json` 已由 GitHub Actions 生成并公开；
+- Runtime 资产位于公开但面向机器读取的 `runtime-channels` Release；当前签名 manifest sequence 为 `4`；
+- 第三阶段最终成功流水线：`https://github.com/1424801913dd-cmd/dsh-launcher/actions/runs/33413289797`；
+- 发布使用的 Runtime Ed25519 与 Tauri updater 私钥只保存在 GitHub Actions Secrets 和本机受保护的
+  `D:\Secrets\dsh-launcher`；不得读取、提交、打印或复制私钥内容；
+- 当前收尾提交为 `4426f4f`（`fix: exclude generated module fallback from backups`）。
+
+### 2. 真实在线升级中发现并修复的问题
+
+- `0.3.1` 修复健康检查 URL 规范化时在 token 查询参数后追加 `/`、导致访问令牌失效的问题；
+- `0.3.2` 支持 DSH 返回的本地 `303 + Set-Cookie` 健康检查流程，只允许最多五次且始终限制在同一
+  `http://127.0.0.1:<port>`，不会把 Cookie 或 token 发送到其他主机或端口；
+- `0.3.3` 修复生产备份被 `$DSH_HOME/profiles/node_modules` 内 Runtime 生成的 Junction 阻止的问题；
+- 备份现在只排除精确的共享模块映射目录 `profiles/node_modules`。该目录由 DSH 在启动时按当前安装自动
+  重建和重新指向；配置、会话、存储、附件、profile 文件和 profile 自己的依赖目录仍会备份；
+- 除上述精确目录外，备份继续拒绝任何符号链接、Junction、重解析点和特殊文件，不能为了兼容而放宽。
+
+### 3. 当前生产验收状态
+
+- `active.json`：`signed-0.1.2-alpha.2`，Node `24.20.0`，`managed=true`，`smokeTested=true`；
+- `previous.json`：`legacy-0.1.1-rc.2`，可由启动器执行回滚；
+- 当前生产 DSH 由受管 Node
+  `D:\Tools\dsh-launcher\versions\dsh-0.1.2-alpha.2\node\node.exe` 运行；
+- 生产切换后随机 loopback 端口健康检查通过，日志记录“签名 Runtime 0.1.2-alpha.2 已生效”；
+- 本次生产备份：`D:\Caches\dsh-launcher\backups\dsh-home-1788230783283`；
+- 已核验备份包含 `settings.yaml`、`sessions`、`storages`、`attachments` 与 `profiles/web`，不含生成的
+  `profiles/node_modules`，且备份目录内没有重解析点；
+- `scripts/check.ps1` 在 `0.3.3` 上通过：Rust 测试 12 项通过、0 项失败、2 项真实环境测试按设计忽略；
+- 本机安装目录 `D:\Bian_CHENG\dsh-launcher\DSH Launcher` 是用户选择的程序安装目录，不属于源码，
+  Git 中保持未跟踪，不能误提交；
+- 本轮 `.tmp-e2e` 下载和审计临时目录已删除。
+
+### 4. 第四阶段开工边界
+
+第四阶段按第十三节“发布质量”推进，不再重复第三阶段功能。建议顺序如下：
+
+1. 盘点可用的 Windows Authenticode 代码签名证书、密钥托管方式和 RFC 3161 可信时间戳服务；在证书
+   未确定前先完成可自动化的安装器与故障注入测试，不得用 Tauri updater Ed25519 签名冒充 Authenticode；
+2. 建立干净 Windows 10/11 x64 虚拟机验收矩阵，覆盖无 Node、无 DSH、无开发工具的首次安装、启动、
+   更新、卸载和数据保留；
+3. 增加断网、下载中断、损坏资产、进程崩溃以及 staging/指针切换中断恢复测试，并证明旧 Runtime
+   始终可启动；
+4. 完成安装器签名、签名验证、SmartScreen 观测与安装/卸载回归；SmartScreen 声誉状态必须如实记录，
+   不能把“已签名”等同于“不会警告”；
+5. 审查品牌、MIT `LICENSE`、第三方 `NOTICE`、隐私说明、日志脱敏和 Release 文案；
+6. 执行第十三节验收清单，包括连续启停 100 次与强制退出后的 Job 进程树清理，形成可复现报告。
+
+第四阶段开始前无需重新生成 Runtime/Tauri 密钥，也不要删除当前 Alpha、上一 rc.2 或本次生产备份。

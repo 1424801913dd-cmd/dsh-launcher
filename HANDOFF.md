@@ -494,7 +494,7 @@ compatibility recipe、lockfile、Node.js 版本和 smoke test，不能简单使
 ```text
 DSH Launcher                              设置
 
-           [官方 DSH 鲸鱼标志]
+           [DSH Launcher 自有终端图标]
            ● 正在运行
            DSH 0.1.1-rc.2 · Node 24.19.0
 
@@ -507,13 +507,13 @@ DSH Launcher                              设置
 日志                                                ▾
 ```
 
-界面采用白色主背景、官方蓝色强调和黑色正文，优先保证高对比度与可读性，并保留键盘导航、
-清晰的进度状态与错误详情。
-Logo 应使用官方仓库 `apps/web/public/favicon.svg` 中的 DSH 鲸鱼标志，不自行临摹。
+界面采用白色主背景、蓝色强调和黑色正文，优先保证高对比度与可读性，并保留键盘导航、
+清晰的进度状态与错误详情。应用 Logo 使用本项目自有的“终端 + 启动”几何图形，不复用 DeepSeek
+鲸形标识。
 
 若项目公开发布，产品名建议使用 `DSH Launcher`，并在关于页注明“非官方社区启动器，兼容
-DeepSeek Harness”。官方品牌规范允许准确描述兼容关系，但建议生态项目使用 `DSH` 缩写，避免
-把完整的 `DeepSeek Harness` 商标直接作为第三方产品名，也不得造成官方背书、合作或授权的误解。
+DeepSeek Harness”，并明确独立维护、未经审核、赞助或背书。上游官方仓库确认命令名缩写为 `dsh`；
+截至 2026-09-01 的复核没有找到官方商标或 Logo 再使用授权，因此不得造成官方背书、合作或授权的误解。
 
 ### 10. 可借鉴项目与参考资料
 
@@ -530,7 +530,7 @@ DeepSeek Harness”。官方品牌规范允许准确描述兼容关系，但建�
 - DeepSeek Harness：<https://github.com/deepseek-ai/deepseek-harness>
 - DSH npm 包：<https://www.npmjs.com/package/@deepseek-ai/dsh>
 - DSH CLI 关闭行为：<https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/reference/README.md>
-- DSH 品牌规范：<https://github.com/deepseek-ai/deepseek-harness/blob/master/BRAND_GUIDELINES.zh.md>
+- 发布身份与许可证复核：`docs/RELEASE_REVIEW.md`
 - Tauri Updater：<https://v2.tauri.app/plugin/updater/>
 - Tauri Sidecar：<https://v2.tauri.app/develop/sidecar/>
 - Windows Job Object：<https://learn.microsoft.com/windows/win32/procthread/job-objects>
@@ -572,7 +572,7 @@ DeepSeek Harness”。官方品牌规范允许准确描述兼容关系，但建�
 ### 12. 验收标准
 
 - [ ] 连续启动和停止 100 次，不残留 DSH、Node.js、PTY、工具子进程或监听端口；
-- [ ] 启动器强制退出后，受管 DSH 的 Job 进程树能全部终止；
+- [x] 启动器强制退出后，受管 DSH 的 Job 进程树能全部终止；
 - [ ] 停止成功前必须同时验证进程树为空、端口释放和健康检查失效；
 - [ ] 端口被其他程序占用时只报告冲突，绝不结束该程序；
 - [ ] 双击或多个启动器实例不会并发启动两个 DSH；
@@ -914,3 +914,243 @@ HTTPS 端点与公钥后才会启用。
 6. 执行第十三节验收清单，包括连续启停 100 次与强制退出后的 Job 进程树清理，形成可复现报告。
 
 第四阶段开始前无需重新生成 Runtime/Tauri 密钥，也不要删除当前 Alpha、上一 rc.2 或本次生产备份。
+
+## 二十一、第四阶段首批实施记录（2026-09-01）
+
+第四阶段“发布质量”已经开工，源码版本提升为 `0.4.0`。当前公开安装版仍为 `0.3.3`；在安装器、
+Authenticode、干净虚拟机和发布验收完成前，不得把本地 `0.4.0` 构建描述为生产发布版。
+
+### 1. 故障注入与缓存提交边界
+
+- Runtime Bundle 下载、校验和缓存提交已拆成可注入输入流的确定性测试边界；
+- 新测试覆盖下载提前结束和同长度内容损坏，两种情况下都必须保留上一份已验证缓存、拒绝提交新文件，
+  并且不留下 `.part-*` 半文件；
+- 修复了 Windows 下载失败路径仍持有输出文件句柄、可能导致半文件清理失败的问题；
+- 已验证 Bundle 现在通过 `MoveFileExW(REPLACE_EXISTING | WRITE_THROUGH)` 原子替换缓存，不再先删除旧缓存
+  再 rename，断电窗口内仍保留旧缓存或完整新缓存；
+- 新增 staging/活动指针中断测试：未提交的 staging Runtime 和 `.active.json.*.tmp` 不会进入 Runtime
+  catalog，现有 `active.json` 及其 Node/DSH 入口继续有效。
+
+### 2. 日志隐私修复
+
+- 审查发现旧实现会把 DSH stdout 中带访问 token 的 loopback URL 原样写入内存和持久日志；
+- 所有日志现在先统一脱敏，再进入 UI 日志队列或磁盘日志：URL 查询参数/片段、token、API Key、
+  Authorization、Cookie、password 和 secret 值会替换为 `[REDACTED]`；
+- 新增幂等回归测试，避免重复启动后对已脱敏文本产生二次破坏；
+- 启动器启动时会检查当前和上一份历史日志，使用同卷临时文件和原子替换完成旧日志脱敏；失败时只记录
+  通用警告，不把原始错误内容再次写入日志；
+- 本机现有 `D:\Caches\dsh-launcher\logs\launcher.log` 已原子脱敏。脱敏前只统计到 6 处敏感模式，
+  未打印或复制其值；脱敏后 URL 查询和敏感字段未脱敏匹配均为 0；
+- 新增 [隐私说明](docs/PRIVACY.md)，记录本地数据、备份、日志、网络连接和卸载保留边界。
+
+### 3. 可重复发布质量检查
+
+新增 `scripts/phase4-check.ps1`：
+
+```powershell
+# 本地基线；未签名和缺少安装器显示为 WARN
+& '.\scripts\phase4-check.ps1' -RunProjectChecks `
+  -ReportPath 'phase4-results\baseline.json'
+
+# 正式发布硬闸门；未签名或没有安装器直接失败
+& '.\scripts\phase4-check.ps1' -RunProjectChecks `
+  -RequireAuthenticode -RequireInstaller `
+  -ReportPath 'phase4-results\release-gate.json'
+```
+
+检查项包括前端/Rust 测试、必要文档、Release EXE、安装器制品、每个制品的 Authenticode 状态，以及
+当前用户/本机证书库内是否存在带私钥且未过期的代码签名证书。机器相关 JSON 报告写入已忽略的
+`phase4-results`，不提交仓库。
+
+### 4. 当前验证与 Authenticode 基线
+
+- `scripts/check.ps1` 通过：Rust 共 18 项测试，16 项通过、0 项失败、2 项真实联网/生命周期测试按设计
+  忽略；前端类型检查、构建和 Rust 格式检查通过；
+- `scripts/build.ps1` 成功生成本地 `0.4.0` Release EXE：
+  `src-tauri\target\release\dsh-launcher.exe`；
+- 当前源码 Release EXE、生产安装目录中的 `dsh-launcher.exe` 和 `uninstall.exe` 均为 `NotSigned`；
+- `Cert:\CurrentUser\My` 与 `Cert:\LocalMachine\My` 当前没有带私钥的可用代码签名证书；
+- 本地阶段四配置已经生成一个 NSIS 安装器，因此质量基线中的 `installer-artifacts` 已由 `WARN` 变为
+  `PASS`；安装器与 Release EXE 仍为 `NotSigned`，`authenticode` 和 `code-signing-certificate` 继续是
+  预期 `WARN`，不能改写为通过；
+- 已用 `-RequireAuthenticode -RequireInstaller` 实际运行发布硬闸门，脚本按预期以退出码 1 拒绝当前
+  未签名构建，证明警告不会在正式发布检查中被误当成通过。
+
+### 5. 本地 NSIS 安装器与隔离测试入口
+
+- `tauri.conf.json` 固定 NSIS 为当前用户安装、禁止降级、中英文资源、LZMA 压缩、独立开始菜单目录，
+  并为安装器/卸载器使用项目图标；普通源码构建仍保持 `bundle.active=false`；
+- `src-tauri/tauri.phase4.conf.json` 只为本地质量测试开启 NSIS，不生成 updater 制品，也不注入生产更新
+  公钥或端点；
+- `scripts/build-unsigned-installer.ps1` 显式使用 `--no-sign`，已生成：
+  `src-tauri\target\release\bundle\nsis\DSH Launcher_0.4.0_x64-setup.exe`；当前大小约 2.01 MiB，
+  文件与产品版本均为 `0.4.0`，Authenticode 状态为 `NotSigned`；
+- Tauri bundler 在 Windows 上通过 Known Folder API 固定读取 `%LOCALAPPDATA%\tauri`，不接受进程级
+  `LOCALAPPDATA` 覆盖。本机已把该精确目录迁移到 `D:\Caches\dsh-launcher\tauri-bundler-tools`，并在
+  C 盘原位置建立目录联接；当前 NSIS 3.11 工具缓存约 6.84 MiB。第二次构建直接复用 D 盘缓存，未重新
+  下载；构建脚本会校验联接目标，避免后续缓存静默回到 C 盘；
+- `scripts/test-installer.ps1` 覆盖静默安装、版本与资源文件、静默卸载、可执行文件/快捷方式移除和独立
+  数据 sentinel 保留；必须显式传入 `-IsolatedEnvironment`，并在发现本仓库内生产安装或启动器进程时
+  先于任何写入拒绝运行；本机保护分支已经实测通过；
+- 当前宿主机没有 Windows Sandbox 或 Hyper-V，同时存在 `DSH Launcher\` 生产安装目录，因此没有在
+  宿主机执行同标识安装器，避免覆盖公开版 `0.3.3`；
+- 新增手动工作流 `.github/workflows/phase4-installer.yml`，在一次性 GitHub Windows runner 上构建未签名
+  NSIS、执行静默安装/卸载脚本并上传安装器与 JSON 报告。该工作流尚未提交、推送或真实运行；
+  `windows-latest` runner 也不能替代 Windows 10/11 客户端虚拟机矩阵。
+
+### 6. 当前生产 Alpha 连续启停 100 次
+
+- 真实生命周期测试新增 `DSH_LAUNCHER_LIFECYCLE_CYCLES`，支持 1～1000 次循环；每轮依次验证启动成功、
+  HTTP 健康检查成功、正常停止、原端口健康检查失效，以及受管进程/Job 句柄释放；
+- `scripts/lifecycle-soak.ps1` 默认执行 100 次，拒绝在 `dsh-launcher.exe` 正在运行时开始，并在测试结束后
+  通过 `Win32_Process` 检查任何命令行包含 `dsh-bridge.mjs` 的残留 Node 进程；
+- soak 默认读取 `D:\Tools\dsh-launcher\active.json`，本轮实际使用
+  `signed-0.1.2-alpha.2`、DSH `0.1.2-alpha.2`、Node `24.20.0`，测试数据位于一次性隔离
+  `DSH_HOME`，没有读取或改写生产用户数据；
+- 100/100 次全部通过，Rust 测试耗时 245.65 秒，端到端报告总耗时 246.501 秒，退出码为 0；
+- 结束后 `D:\Caches\dsh-launcher\tests` 为空，受管 DSH 进程数为 0；连续运行新增日志中的未脱敏 URL
+  查询和敏感字段匹配也均为 0；
+- 报告位于已忽略的 `phase4-results\lifecycle-soak-100.json`。该项完成了第十三节“连续启动和停止
+  100 次”的本机证据。
+
+### 7. 启动器强制退出后的 Job 进程树清理
+
+- 新增 Windows 集成测试 `src-tauri/tests/job_crash.rs` 和入口脚本 `scripts/job-crash-test.ps1`；测试使用
+  一次性隔离 `DSH_HOME` 启动当前活动 Runtime，并拒绝在真实启动器进程运行时执行；
+- 测试监督进程创建带 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 的 Job Object，把 DSH 进程加入 Job，等待
+  HTTP 健康检查通过后直接执行 `process::exit(86)`，不发送正常停止指令，也不运行 Rust 析构逻辑；
+- 本轮实际使用 `signed-0.1.2-alpha.2`、DSH `0.1.2-alpha.2`、Node `24.20.0`。监督进程异常退出后，
+  受管 DSH PID 在 15 秒闸门内终止，原回环 URL 健康检查失效，测试以退出码 0 通过；
+- 端到端耗时 4.116 秒；结束后残留的 `dsh-bridge.mjs` Node 进程数为 0，一次性测试根目录已删除，
+  `D:\Caches\dsh-launcher\tests` 为空；
+- 报告位于已忽略的 `phase4-results\job-crash.json`。这提供了第十三节“启动器强制退出后受管 DSH
+  Job 进程树全部终止”的本机证据。
+
+### 8. 第三方许可证清单与发布复核闸门
+
+- 新增 `scripts/license-audit.mjs`，离线读取 `package-lock.json`、Windows x64 的 `cargo metadata --locked`
+  结果和当前活动 Runtime 锁文件；报告与 NOTICE 都从锁定依赖图生成，不依赖手工抄写；
+- 当前清单覆盖启动器 JavaScript 生产依赖 6 个、Windows Rust 依赖 332 个，以及
+  `signed-0.1.2-alpha.2` Runtime 实际安装依赖 521 个；Runtime 锁文件中的跨平台依赖为 580 个，未随
+  当前 Windows x64 Runtime 安装的 59 个不会再误判为发行内容。三组依赖的 license 元数据缺失数均为
+  0，Node.js 顶层 `LICENSE` 也已确认存在；
+- 生成的 `docs/THIRD_PARTY_NOTICES.md` 约 39 KiB。`phase4-check.ps1` 会重新计算依赖图并验证该文件
+  没有过期；审计 JSON 位于已忽略的 `phase4-results\license-audit.latest.json`；
+- 实际复核项从 19 个收敛为 6 个。5 个 MPL-2.0 Rust 包已在 NOTICE 中记录精确版本 crates.io 源码地址，
+  状态为 `documented-source-availability`；实际携带的 `@img/sharp-win32-x64@0.35.4` 仍为唯一
+  `manual-review-required` 项；
+- `docs/RELEASE_REVIEW.md` 固化非官方身份、Logo 边界、官方一手依据、MPL 处置和 sharp/libvips 的
+  LGPL 待确认事项。原 DeepSeek 鲸形 SVG 及全部应用图标已替换为本项目自有的中性启动器图形；
+- `phase4-check.ps1 -RequireLicenseReview` 现在只对没有处置记录的真实发行项失败，因此仍会由上述 1 个
+  LGPL 项拒绝发布；
+- Tauri 配置将项目 MIT `LICENSE` 设为安装器许可证文件，并把项目许可证、隐私说明、发布复核和第三方
+  NOTICE 映射到安装目录 `resources`；四个源文件与 Release 资源副本的 SHA-256 已逐一确认一致；
+- `phase4-results\phase4-check-runtime-locks-final.json` 中项目检查、品牌身份、Logo 来源、两套完整 Runtime
+  锁、许可证元数据和 Runtime 清单均通过；`phase4-results\release-gate-runtime-locks-final.json` 仍按预期
+  只因 1 个 LGPL 人工复核项、内部
+  EXE/安装器未签名和本机无代码签名证书而失败；
+- 新增 `scripts/runtime-license-evidence.ps1`，使用 PE 导入表记录 sharp 原生模块与 libvips DLL 的动态链接
+  边界；报告位于 `phase4-results\runtime-license-evidence.json`。新增单元测试确认安装后替换原生 DLL
+  不会被 Runtime 记录哈希拦截。libvips 本体具备替换路径，但其 DLL 不导入 README 所列多项 LGPL
+  组件；结合上游 Windows static web release 说明，静态并入组件的重链接材料仍是唯一许可证硬阻塞；
+- `Build-RuntimeBundle.ps1` 现在为每个实际构建的 Runtime 生成精确安装依赖 NOTICE 与 JSON 报告，并在
+  `app` 内随包放入 GNU GPLv3/LGPLv3 全文、`docs/RUNTIME_LICENSES.md` 模板实例及原生包自带材料；模板
+  会从本次锁文件解析 sharp 与 sharp-libvips 精确版本，不复用当前开发机版本；
+- `.github/workflows/release.yml` 在任何 Runtime 签名和上传前读取该 JSON，只要仍有
+  `manual-review-required` 项就立即失败；通过后还会把许可证报告与 Runtime 资产一起发布。当前 sharp
+  LGPL 项会有意阻止该工作流，避免材料尚未人工确认时误发；
+- 完整 Bundle 实测发现原流程只固定顶层 `@deepseek-ai/dsh@0.1.2-alpha.2` integrity，重新解析时约两百个
+  内部 `@deepseek-ai/dsh-*` 依赖已漂移到 `0.1.2-alpha.3`；该测试构建没有签名或发布。现在新增
+  `scripts/prepare-runtime-lock.mjs` 和版本化完整锁，Bundle 构建改为 `npm ci`，校验锁文件前后 SHA-256、
+  顶层 integrity 和所有内部 DSH 包精确版本，缺锁时在联网前失败关闭；
+- RC2 完整锁含 509 个跨平台包，SHA-256
+  `F50E5321334C02D6A7D957B765B75C1FFF49215BF3E3CC65A51571468D3F9DB5`；真实 Windows x64 Bundle
+  安装 450 个包。Alpha.2 完整锁含 580 个跨平台包，SHA-256
+  `660BEE1F294CA61B1C82F37292865622131D69814575C11D682892A50C764AEC`；真实安装 521 个包；
+- 两个通道均已完成完整 Bundle 构建、原生模块 smoke test、ZIP 内 lock 哈希一致性和 7 类许可证材料
+  存在性验证。RC2 测试 ZIP 为 101,685,081 字节，SHA-256
+  `D5DFAFF1B6913344D89DBED5151384970E30EF90FA20961417D99F068A0E0781`；Alpha.2 为 102,922,190 字节，
+  SHA-256 `8CA53EC893D553FCAA30A34BD5456BF1BB56D7C149C90DC3FB66FD81450D0FE4`。两个约 100 MiB 的测试 ZIP
+  已在验证后清理，只保留 `phase4-results\runtime-bundle-final-*` 下的审计 JSON 和元数据；
+- 新增 `docs/RELEASE_TEMPLATE.md`，固定非官方/独立维护/未获背书、上游 developer preview、隐私、数据
+  保留、许可证材料和发布前 Authenticode/虚拟机/SmartScreen 闸门文案；发布工作流会替换启动器版本、
+  Runtime 通道和 DSH 版本后作为 draft Release 正文。`tauri-action` 已按官方当前文档更新到 `v1`；
+- 最新未签名 NSIS 大小为 2,152,290 字节，SHA-256 为
+  `845444E52DB3232011DEA932C0735671117214558A66E74C06B3996C077EE3E7`，Authenticode 仍为
+  `NotSigned`。
+
+### 9. 更新故障注入与自动恢复
+
+- 新增 `scripts/update-health-fault-test.ps1`。候选 Runtime 的 DSH 入口在健康检查可用前直接
+  `process.exit(42)`；启动器拒绝该候选并回滚活动指针，随后使用 `signed-0.1.2-alpha.2` 重新启动、
+  通过健康检查并真正停止。端到端耗时 5.526 秒，残留受管进程为 0，报告位于
+  `phase4-results\update-health-fault.json`；
+- 新增真实回环 TCP 断流测试：服务端声明 1,024 字节，只发送 128 字节后关闭连接。下载失败不会替换
+  已验证旧缓存，正常错误路径会关闭句柄并立即删除 partial；
+- 新增下载进程强杀测试：辅助测试进程进入流式写入后被父进程终止。旧缓存仍保持原字节，下一次下载
+  会只识别并清理同目标、严格数字时间戳命名的 `.part-*` 残留；异常类型或重解析点会被拒绝；
+- 新增 `scripts/backup-crash-test.ps1`。备份完成复制、提交 staging 前，辅助进程执行
+  `process::exit(87)`；活动 Runtime 指针不变，下一次备份会清理严格命名的
+  `.dsh-home-<时间戳>.staging`，且绝不跟随符号链接或重解析点；
+- 新增 `scripts/switch-crash-test.ps1`。辅助进程在 `previous.json` 已原子提交、`active.json` 尚未写入时
+  执行 `process::exit(88)`；旧活动指针保持有效，随后正常切换和回滚均通过。报告位于
+  `phase4-results\switch-crash.json`，耗时 0.701 秒；
+- 新增 `scripts/staging-crash-test.ps1`。已验证 Runtime 的 `runtime.json` 同步完成后、staging 目录原子
+  重命名前，辅助进程执行 `process::exit(89)`；旧活动指针不变，未提交版本不会出现在 `versions`，
+  下一次同版本安装会安全清理严格命名的残留 staging。报告位于
+  `phase4-results\staging-crash.json`，耗时 0.712 秒；
+- 下载断流/强杀报告位于 `phase4-results\download-faults.json`，端到端耗时 1.242 秒；备份强杀报告位于
+  `phase4-results\backup-crash.json`，端到端耗时 0.665 秒。上述报告目录均被 Git 忽略；
+- 故障注入和 DLL 可替换性测试合入默认测试后，全量 Rust 单元测试为 22 通过、3 个需真实环境的显式忽略；Job 强杀集成测试
+  仍由专用脚本显式触发。`phase4-results\phase4-check-after-fault-injection.json` 中前端、格式、Rust、
+  许可证元数据与 Runtime 清单均通过，许可证义务和 Authenticode 保持预期警告。
+
+### 10. 仍未完成的第四阶段闸门
+
+- Authenticode 方案已确定为 SignPath Foundation；仍需仓库所有者提交申请、接受条款、启用 MFA，并在获批后
+  配置 SignPath project/policy/artifact configuration 标识与最小权限 API token；
+- 对 NSIS 安装器和内部 EXE 完成 Authenticode 签名，验证签名链、时间戳、升级安装、卸载和数据保留；
+- 在无 Node、无 DSH、无开发工具的干净 Windows 10/11 x64 虚拟机执行矩阵测试；
+- 对 `@img/sharp-win32-x64` 及其预编译 LGPL 组件完成共享库替换/重链接材料、许可证全文与源码归档复核；
+- 将已完成的非官方身份与自有 Logo 边界落实到最终 Release 页面文案；
+- 记录真实 SmartScreen 观测。获得 Authenticode 签名不等于已经建立 SmartScreen 声誉。
+
+### 11. SignPath Foundation 双阶段签名落地
+
+- 2026-09-01 已由项目所有者选择 SignPath Foundation 作为 Windows Authenticode 方案。公开仓库
+  `1424801913dd-cmd/dsh-launcher` 已有 MIT 许可证和多个 Windows Release，满足“公开、已有同形态发布”这一
+  申请前置事实；最终资格仍由 SignPath Foundation 审核；
+- 新增 `docs/CODE_SIGNING_POLICY.md`，并在 README 与 Release 模板使用 SignPath 要求的 “Code signing
+  policy” 标题和归属文案；记录 authors/reviewers/approvers、MFA、隐私、trusted build、人工审批和非官方
+  身份边界。`docs/SIGNPATH_APPLICATION.md` 汇总申请链接、资格声明、控制台配置和必须由所有者完成的动作；
+- `.github/workflows/release.yml` 不再让 `tauri-action` 一步构建并上传。新顺序是：许可证硬门禁 → 生成并
+  丢弃一次未签名 NSIS 预打包以固定 EXE bundle 元数据 → 上传 GitHub Actions artifact → SignPath 签 EXE
+  → 验证 SignPath Foundation 签名与时间戳 → 用已签 EXE 重新构建 NSIS → 第二次 SignPath 签安装器 →
+  安装/卸载/数据保留测试 → 创建 updater ZIP →
+  Ed25519 签 updater → 生成 `latest.json` → 创建 GitHub draft Release；
+- 之所以必须分两次 SignPath 请求，是因为安装器需要携带已签名内部 EXE；而 Tauri updater 的 ZIP 与签名
+  必须在安装器 Authenticode 完成后生成，否则 SignPath 写入 PE 签名会使此前的 updater 摘要失效；
+- 本地实测 `tauri bundle` 会报告为 EXE 写入 NSIS bundle 类型信息。流水线因此在 SignPath 前先做一次
+  同目标预打包；对已经完成该元数据写入的 EXE 再次 bundle，前后 SHA-256 保持一致。最终安装测试仍会
+  验证从安装器释放出的内部 EXE Authenticode，防止未来 Tauri 行为变化静默破坏签名；
+- 新增 `scripts/verify-authenticode.ps1`，默认要求签名 Subject 包含 `SignPath Foundation`，可强制可信
+  时间戳并输出 SHA-256/证书 JSON；`test-installer.ps1 -RequireAuthenticode` 还会验证真正安装后的内部 EXE；
+- 新增 `scripts/prepare-tauri-update-manifest.mjs`，只为最终签名安装器 ZIP 生成 Windows x64 静态 updater
+  manifest。`prepare-tauri-release-config.mjs` 改为不在 bundling 时提前生成 updater artifacts；
+- `phase4-check.ps1` 增加 SignPath 政策文案门禁，并允许“制品已有有效外部 Authenticode、私钥位于云签名
+  服务”作为证书能力通过条件，不再错误要求 GitHub runner 的本机证书库持有私钥；
+- 发布 job 只接受 `main`，并以 concurrency group 串行化，避免两个签名审批/同版本 draft 竞争；原先 job
+  级注入的 Runtime/Tauri 私钥已收窄到各自唯一签名步骤，npm 安装、编译、SignPath 和安装测试不再继承；
+- 当前不能真实提交签名：SignPath Foundation 项目尚未申请/批准，GitHub 尚无 `SIGNPATH_API_TOKEN` 与五个
+  SignPath Variables。这是下一处需要仓库所有者介入的外部身份边界；不得用占位值、个人 PFX 或未签名
+  上传绕过；
+- sharp/libvips 的 LGPL 人工复核仍位于任何 SignPath 请求之前，因此即使 SignPath 配置完成，许可证问题
+  未解除时流水线也会在上传待签制品前失败关闭。
+- 本轮验证：release workflow 用 PyYAML 6.0.1 成功解析为 25 个 steps；三个 PowerShell 脚本与两个 Node
+  脚本语法通过；`scripts/check.ps1` 通过（Rust 22 通过、3 忽略、0 失败）；SignPath 文案/文档、品牌、
+  Runtime 锁和许可证元数据门禁通过。基线报告为
+  `phase4-results/signpath-baseline-final.json`，仅保留 1 个 LGPL 人工复核 WARN 与预期未签名 WARN；
+- 本地按发布配置从源码重建后，未签名内部 EXE 为 5,476,352 字节，SHA-256
+  `1DE85D15DAD6889C64223751F8D5AB65C589025157509EEB8F425993CB764EC0`；未签名 NSIS 为 2,154,531 字节，
+  SHA-256 `5E7BA2FBDBF737A413D0EF144706B8A81CDFC1CACCF77A343E7116CD36EC5130`。两者仍是 `NotSigned`，不得公开；
+  `DSH Launcher\` 中的生产 `0.3.3` 安装没有运行、覆盖或删除。

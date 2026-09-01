@@ -564,6 +564,17 @@ where
 }
 
 pub fn switch_to(root: &Path, version_or_id: &str) -> Result<RuntimeRecord, String> {
+    switch_to_after_previous(root, version_or_id, || {})
+}
+
+fn switch_to_after_previous<F>(
+    root: &Path,
+    version_or_id: &str,
+    after_previous: F,
+) -> Result<RuntimeRecord, String>
+where
+    F: FnOnce(),
+{
     let records = scan_records(root)?;
     let target = records
         .into_values()
@@ -578,6 +589,7 @@ pub fn switch_to(root: &Path, version_or_id: &str) -> Result<RuntimeRecord, Stri
             return Ok(target);
         }
         atomic_write_json(&root.join("previous.json"), &current)?;
+        after_previous();
     }
     atomic_write_json(&active_path, &target)?;
     Ok(target)
@@ -1126,7 +1138,7 @@ pub(crate) fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<
 }
 
 #[cfg(windows)]
-fn replace_file(source: &Path, destination: &Path) -> Result<(), String> {
+pub(crate) fn replace_file(source: &Path, destination: &Path) -> Result<(), String> {
     let source_wide: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
     let destination_wide: Vec<u16> = destination
         .as_os_str()
@@ -1151,7 +1163,7 @@ fn replace_file(source: &Path, destination: &Path) -> Result<(), String> {
 }
 
 #[cfg(not(windows))]
-fn replace_file(source: &Path, destination: &Path) -> Result<(), String> {
+pub(crate) fn replace_file(source: &Path, destination: &Path) -> Result<(), String> {
     fs::rename(source, destination)
         .map_err(|error| format!("无法更新 {}：{error}", destination.display()))
 }
@@ -1217,5 +1229,186 @@ mod tests {
         atomic_write_json(&root.join("active.json"), &record).expect("write pointer");
         assert_eq!(read_record(&root.join("active.json")).unwrap(), record);
         fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn installed_runtime_record_does_not_pin_replaceable_native_library_hashes() {
+        let root = temporary_root("replaceable-native-library");
+        let node = root.join("node.exe");
+        let entry = root.join("bin.js");
+        let native_library = root.join("app/node_modules/@img/sharp-win32-x64/lib/libvips-42.dll");
+        let home = root.join("home");
+        let workspace = root.join("workspace");
+        fs::create_dir_all(native_library.parent().expect("native library parent"))
+            .expect("native library directory");
+        fs::create_dir_all(&home).expect("home");
+        fs::create_dir_all(&workspace).expect("workspace");
+        fs::write(&node, b"node").expect("node");
+        fs::write(&entry, b"entry").expect("entry");
+        fs::write(&native_library, b"upstream library").expect("native library");
+        let record = RuntimeRecord {
+            schema_version: 1,
+            id: "replaceable-library-test".to_string(),
+            dsh_version: "1.0.0".to_string(),
+            node_version: "24.20.0".to_string(),
+            channel: "recommended".to_string(),
+            recipe_id: "test".to_string(),
+            node_path: node.display().to_string(),
+            dsh_entry: entry.display().to_string(),
+            dsh_home: home.display().to_string(),
+            workspace: workspace.display().to_string(),
+            package_integrity: "sha512-install-time-only".to_string(),
+            managed: true,
+            smoke_tested: true,
+            installed_at_ms: now_ms(),
+        };
+
+        assert!(record_valid(&record));
+        fs::write(
+            &native_library,
+            b"user supplied interface-compatible library",
+        )
+        .expect("replace native library");
+        assert!(record_valid(&record));
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn interrupted_staging_and_pointer_write_leave_active_runtime_usable() {
+        let root = temporary_root("interrupted-switch");
+        let old_root = root.join("versions/old");
+        let staged_root = root.join("staging/new-interrupted");
+        let home = root.join("home");
+        let workspace = root.join("workspace");
+        for directory in [&old_root, &staged_root, &home, &workspace] {
+            fs::create_dir_all(directory).expect("test directory");
+        }
+        fs::write(old_root.join("node.exe"), b"old node").expect("old node");
+        fs::write(old_root.join("bin.js"), b"old entry").expect("old entry");
+        fs::write(staged_root.join("node.exe"), b"new node").expect("new node");
+        fs::write(staged_root.join("bin.js"), b"new entry").expect("new entry");
+
+        let old = RuntimeRecord {
+            schema_version: 1,
+            id: "old".to_string(),
+            dsh_version: "1.0.0".to_string(),
+            node_version: "24.20.0".to_string(),
+            channel: "recommended".to_string(),
+            recipe_id: "old-recipe".to_string(),
+            node_path: old_root.join("node.exe").display().to_string(),
+            dsh_entry: old_root.join("bin.js").display().to_string(),
+            dsh_home: home.display().to_string(),
+            workspace: workspace.display().to_string(),
+            package_integrity: "sha512-old".to_string(),
+            managed: true,
+            smoke_tested: true,
+            installed_at_ms: now_ms(),
+        };
+        let interrupted = RuntimeRecord {
+            id: "new-interrupted".to_string(),
+            dsh_version: "2.0.0".to_string(),
+            recipe_id: "new-recipe".to_string(),
+            node_path: staged_root.join("node.exe").display().to_string(),
+            dsh_entry: staged_root.join("bin.js").display().to_string(),
+            package_integrity: "sha512-new".to_string(),
+            ..old.clone()
+        };
+        atomic_write_json(&root.join("active.json"), &old).expect("active pointer");
+        atomic_write_json(&staged_root.join("runtime.json"), &interrupted)
+            .expect("staged runtime record");
+        fs::write(
+            root.join(".active.json.interrupted.tmp"),
+            serde_json::to_vec_pretty(&interrupted).expect("serialize interrupted pointer"),
+        )
+        .expect("interrupted pointer temporary");
+
+        assert_eq!(read_record(&root.join("active.json")).unwrap(), old);
+        assert!(record_valid(&old));
+        let records = scan_records(&root).expect("scan committed runtimes");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records.get("old"), Some(&old));
+        assert!(!records.contains_key("new-interrupted"));
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn switch_process_crash_between_pointers_preserves_old_active_and_recovers() {
+        const HELPER_ENV: &str = "DSH_LAUNCHER_SWITCH_CRASH_HELPER";
+        const ROOT_ENV: &str = "DSH_LAUNCHER_SWITCH_CRASH_ROOT";
+        let helper = env::var_os(HELPER_ENV).as_deref() == Some(std::ffi::OsStr::new("1"));
+        let root = env::var_os(ROOT_ENV)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| temporary_root("switch-process-crash"));
+        if helper {
+            switch_to_after_previous(&root, "new", || std::process::exit(88))
+                .expect("switch helper must terminate before active pointer write");
+            unreachable!();
+        }
+
+        let old_root = root.join("versions/old");
+        let new_root = root.join("versions/new");
+        let home = root.join("home");
+        let workspace = root.join("workspace");
+        for directory in [&old_root, &new_root, &home, &workspace] {
+            fs::create_dir_all(directory).expect("switch crash test directory");
+        }
+        for (directory, label) in [(&old_root, "old"), (&new_root, "new")] {
+            fs::write(directory.join("node.exe"), label.as_bytes()).expect("test node");
+            fs::write(directory.join("bin.js"), label.as_bytes()).expect("test entry");
+        }
+        let old = RuntimeRecord {
+            schema_version: 1,
+            id: "old".to_string(),
+            dsh_version: "1.0.0".to_string(),
+            node_version: "24.20.0".to_string(),
+            channel: "recommended".to_string(),
+            recipe_id: "old-recipe".to_string(),
+            node_path: old_root.join("node.exe").display().to_string(),
+            dsh_entry: old_root.join("bin.js").display().to_string(),
+            dsh_home: home.display().to_string(),
+            workspace: workspace.display().to_string(),
+            package_integrity: "sha512-old".to_string(),
+            managed: true,
+            smoke_tested: true,
+            installed_at_ms: now_ms(),
+        };
+        let new = RuntimeRecord {
+            id: "new".to_string(),
+            dsh_version: "2.0.0".to_string(),
+            recipe_id: "new-recipe".to_string(),
+            node_path: new_root.join("node.exe").display().to_string(),
+            dsh_entry: new_root.join("bin.js").display().to_string(),
+            package_integrity: "sha512-new".to_string(),
+            installed_at_ms: now_ms().saturating_add(1),
+            ..old.clone()
+        };
+        atomic_write_json(&old_root.join("runtime.json"), &old).expect("old Runtime record");
+        atomic_write_json(&new_root.join("runtime.json"), &new).expect("new Runtime record");
+        atomic_write_json(&root.join("active.json"), &old).expect("old active pointer");
+
+        let current_test = env::current_exe().expect("current unit test executable");
+        let status = std::process::Command::new(current_test)
+            .args([
+                "--exact",
+                "runtime_manager::tests::switch_process_crash_between_pointers_preserves_old_active_and_recovers",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(HELPER_ENV, "1")
+            .env(ROOT_ENV, &root)
+            .status()
+            .expect("run switch crash helper");
+        assert_eq!(status.code(), Some(88));
+        assert_eq!(read_record(&root.join("active.json")).unwrap(), old);
+        assert_eq!(read_record(&root.join("previous.json")).unwrap(), old);
+        assert!(record_valid(&old));
+
+        assert_eq!(switch_to(&root, "new").unwrap(), new);
+        assert_eq!(read_record(&root.join("active.json")).unwrap(), new);
+        assert_eq!(rollback(&root).unwrap(), old);
+        assert_eq!(read_record(&root.join("active.json")).unwrap(), old);
+        fs::remove_dir_all(root).expect("cleanup switch crash test root");
     }
 }

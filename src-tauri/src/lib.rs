@@ -231,7 +231,7 @@ fn append_persistent_log(entry: &LogEntry) {
 
 impl Supervisor {
     fn push_log(&mut self, level: &str, message: impl Into<String>) -> LogEntry {
-        let message = message.into();
+        let message = redact_sensitive_log_text(&message.into());
         let message = if message.chars().count() > 4000 {
             message.chars().take(4000).collect::<String>() + "…"
         } else {
@@ -261,6 +261,162 @@ impl Supervisor {
             secure_update: self.secure_update.clone(),
         }
     }
+}
+
+fn redact_sensitive_log_text(message: &str) -> String {
+    message
+        .split('\n')
+        .map(redact_sensitive_log_line)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn redact_sensitive_log_line(line: &str) -> String {
+    let mut sanitized = redact_url_queries(line);
+    for header in ["authorization:", "cookie:", "set-cookie:"] {
+        let lower = sanitized.to_ascii_lowercase();
+        if let Some(index) = lower.find(header) {
+            sanitized.replace_range(index + header.len().., " [REDACTED]");
+        }
+    }
+    for marker in [
+        "access_token=",
+        "api_key=",
+        "api-key=",
+        "apikey=",
+        "password=",
+        "secret=",
+        "token=",
+        "\"access_token\":",
+        "\"apikey\":",
+        "\"api_key\":",
+        "\"password\":",
+        "\"secret\":",
+        "\"token\":",
+    ] {
+        sanitized = redact_assignment_values(&sanitized, marker);
+    }
+    sanitized
+}
+
+fn redact_url_queries(line: &str) -> String {
+    let mut sanitized = line.to_string();
+    let mut search_from = 0;
+    loop {
+        let remainder = &sanitized[search_from..];
+        let http = remainder.find("http://");
+        let https = remainder.find("https://");
+        let Some(relative_start) = (match (http, https) {
+            (Some(left), Some(right)) => Some(left.min(right)),
+            (Some(index), None) | (None, Some(index)) => Some(index),
+            (None, None) => None,
+        }) else {
+            break;
+        };
+        let url_start = search_from + relative_start;
+        let url_end = sanitized[url_start..]
+            .find(|character: char| {
+                character.is_whitespace()
+                    || matches!(character, ')' | ']' | '}' | '"' | '\'' | ',' | ';')
+            })
+            .map(|length| url_start + length)
+            .unwrap_or(sanitized.len());
+        let sensitive_start = sanitized[url_start..url_end]
+            .find(['?', '#'])
+            .map(|offset| url_start + offset);
+        if let Some(sensitive_start) = sensitive_start {
+            if sanitized[sensitive_start..].starts_with("?[REDACTED]") {
+                search_from = sensitive_start + "?[REDACTED]".len();
+                continue;
+            }
+            sanitized.replace_range(sensitive_start..url_end, "?[REDACTED]");
+            search_from = sensitive_start + "?[REDACTED]".len();
+        } else {
+            search_from = url_end;
+        }
+    }
+    sanitized
+}
+
+fn redact_assignment_values(line: &str, marker: &str) -> String {
+    let mut sanitized = line.to_string();
+    let mut search_from = 0;
+    loop {
+        let lower = sanitized.to_ascii_lowercase();
+        let Some(relative_marker) = lower[search_from..].find(marker) else {
+            break;
+        };
+        let value_start = search_from + relative_marker + marker.len();
+        let secret_start = sanitized[value_start..]
+            .find(|character: char| !character.is_whitespace() && character != '"')
+            .map(|offset| value_start + offset)
+            .unwrap_or(sanitized.len());
+        let secret_end = sanitized[secret_start..]
+            .find(|character: char| {
+                character.is_whitespace()
+                    || matches!(character, '&' | ';' | ',' | '"' | '\'' | ')' | ']' | '}')
+            })
+            .map(|offset| secret_start + offset)
+            .unwrap_or(sanitized.len());
+        if sanitized[secret_start..].starts_with("[REDACTED]") {
+            search_from = secret_start + "[REDACTED]".len();
+            continue;
+        }
+        if secret_start == secret_end {
+            search_from = value_start;
+            continue;
+        }
+        sanitized.replace_range(secret_start..secret_end, "[REDACTED]");
+        search_from = secret_start + "[REDACTED]".len();
+    }
+    sanitized
+}
+
+fn sanitize_persistent_logs() -> Result<usize, String> {
+    let path = runtime_manager::log_path();
+    let Some(parent) = path.parent().map(Path::to_path_buf) else {
+        return Ok(0);
+    };
+    let mut sanitized_files = 0;
+    for candidate in [path, parent.join("launcher.previous.log")] {
+        if sanitize_log_file(&candidate)? {
+            sanitized_files += 1;
+        }
+    }
+    Ok(sanitized_files)
+}
+
+fn sanitize_log_file(path: &Path) -> Result<bool, String> {
+    if !path.is_file() {
+        return Ok(false);
+    }
+    let original = fs::read(path).map_err(|error| format!("无法读取现有启动器日志：{error}"))?;
+    let text = String::from_utf8_lossy(&original);
+    let sanitized = redact_sensitive_log_text(&text);
+    if sanitized.as_bytes() == original {
+        return Ok(false);
+    }
+    let parent = path.parent().ok_or("启动器日志没有父目录。")?;
+    let temporary = parent.join(format!(".launcher-log-redaction-{}.tmp", now_ms()));
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|error| format!("无法创建日志脱敏临时文件：{error}"))?;
+    let result = output
+        .write_all(sanitized.as_bytes())
+        .and_then(|_| output.sync_all())
+        .map_err(|error| format!("无法写入脱敏日志：{error}"));
+    drop(output);
+    if let Err(error) = result {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
+    runtime_manager::replace_file(&temporary, path).map_err(|error| {
+        let _ = fs::remove_file(&temporary);
+        format!("无法原子提交脱敏日志：{error}")
+    })?;
+    Ok(true)
 }
 
 fn shared_log(shared: &Arc<Mutex<Supervisor>>, level: &str, message: impl Into<String>) {
@@ -1672,11 +1828,25 @@ pub fn run() {
                 available_update: None,
                 pending_update: None,
             }));
+            let sanitized_log_files = sanitize_persistent_logs();
             shared_log(
                 &supervisor,
                 "info",
-                "DSH Launcher 第三阶段安全更新组件已初始化。".to_string(),
+                "DSH Launcher 第四阶段发布质量组件已初始化。".to_string(),
             );
+            match sanitized_log_files {
+                Ok(count) if count > 0 => shared_log(
+                    &supervisor,
+                    "info",
+                    format!("已原子脱敏 {count} 个历史启动器日志文件。"),
+                ),
+                Err(_) => shared_log(
+                    &supervisor,
+                    "warn",
+                    "历史启动器日志脱敏未完成；未记录原始错误内容。".to_string(),
+                ),
+                _ => {}
+            }
             if phase == DshPhase::ExternalServiceDetected {
                 shared_log(
                     &supervisor,
@@ -1786,6 +1956,60 @@ mod tests {
         assert_eq!(parse_loopback_url("http://127.0.0.1:not-a-port"), None);
     }
 
+    #[test]
+    fn redacts_tokens_and_credentials_before_logging() {
+        let url =
+            redact_sensitive_log_text("DSH ready at http://127.0.0.1:43123/?token=signed-value");
+        assert_eq!(url, "DSH ready at http://127.0.0.1:43123/?[REDACTED]");
+        assert!(!url.contains("signed-value"));
+
+        let headers = redact_sensitive_log_text(
+            "Authorization: Bearer top-secret\nCookie: dsh_session=session-secret",
+        );
+        assert!(!headers.contains("top-secret"));
+        assert!(!headers.contains("session-secret"));
+        assert!(headers.contains("Authorization: [REDACTED]"));
+        assert!(headers.contains("Cookie: [REDACTED]"));
+
+        let settings = redact_sensitive_log_text(
+            r#"api_key=key-value {"token":"json-secret"} harmless=visible"#,
+        );
+        assert!(!settings.contains("key-value"));
+        assert!(!settings.contains("json-secret"));
+        assert!(settings.contains("harmless=visible"));
+        assert_eq!(
+            redact_sensitive_log_text(&settings),
+            settings,
+            "log redaction must be idempotent"
+        );
+    }
+
+    #[test]
+    fn atomically_sanitizes_existing_log_files() {
+        let root = std::env::temp_dir().join(format!("dsh-log-redaction-{}", now_ms()));
+        fs::create_dir_all(&root).expect("log test root");
+        let path = root.join("launcher.log");
+        fs::write(
+            &path,
+            b"[1] INFO DSH ready at http://127.0.0.1:43123/?token=historical-secret\n",
+        )
+        .expect("historical log");
+
+        assert!(sanitize_log_file(&path).expect("sanitize historical log"));
+        let sanitized = fs::read_to_string(&path).expect("sanitized log");
+        assert!(!sanitized.contains("historical-secret"));
+        assert!(sanitized.contains("?[REDACTED]"));
+        assert!(!sanitize_log_file(&path).expect("idempotent sanitize"));
+        assert!(
+            fs::read_dir(&root)
+                .unwrap()
+                .flatten()
+                .all(|entry| !entry.file_name().to_string_lossy().contains(".tmp"))
+        );
+
+        fs::remove_dir_all(root).expect("cleanup log test root");
+    }
+
     fn redirecting_loopback_server() -> (String, thread::JoinHandle<()>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind test server");
         let address = listener.local_addr().expect("test server address");
@@ -1852,23 +2076,29 @@ mod tests {
     #[test]
     #[ignore = "requires the locally installed DSH runtime"]
     fn starts_and_truly_stops_real_dsh_in_isolated_home() {
+        let cycles = std::env::var("DSH_LAUNCHER_LIFECYCLE_CYCLES")
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+            .filter(|cycles| (1..=1000).contains(cycles))
+            .unwrap_or(1);
         let test_root = runtime_manager::cache_root()
             .join("tests")
             .join(format!("lifecycle-{}", now_ms()));
         fs::create_dir_all(&test_root).expect("create isolated DSH_HOME");
 
-        let runtime = RuntimeInfo {
-            installed: true,
-            runtime_id: Some("lifecycle-test".to_string()),
-            channel: Some("recommended".to_string()),
-            managed_private: false,
-            node_path: MANAGED_NODE.to_string(),
-            node_version: Some("test".to_string()),
-            dsh_entry: MANAGED_DSH_ENTRY.to_string(),
-            dsh_version: Some("test".to_string()),
-            dsh_home: test_root.display().to_string(),
-            workspace: runtime_manager::LEGACY_WORKSPACE.to_string(),
-        };
+        let active_record =
+            runtime_manager::read_record(&runtime_manager::runtime_root().join("active.json"))
+                .ok()
+                .filter(runtime_manager::record_valid);
+        let mut runtime = detect_runtime(active_record.as_ref());
+        assert!(runtime.installed, "an active or legacy runtime is required");
+        runtime.runtime_id = Some("lifecycle-test".to_string());
+        runtime.dsh_home = test_root.display().to_string();
+        eprintln!(
+            "lifecycle runtime: DSH {}, Node {}",
+            runtime.dsh_version.as_deref().unwrap_or("unknown"),
+            runtime.node_version.as_deref().unwrap_or("unknown")
+        );
         let bridge_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("resources")
             .join("dsh-bridge.mjs");
@@ -1898,24 +2128,165 @@ mod tests {
             pending_update: None,
         }));
 
-        let running = start_dsh_blocking(shared.clone()).expect("start real DSH");
-        assert_eq!(running.phase, DshPhase::Running);
-        let url = running.web_url.expect("managed web URL");
-        assert!(http_health(&url), "health endpoint must return HTTP 200");
+        for cycle in 1..=cycles {
+            let running = start_dsh_blocking(shared.clone())
+                .unwrap_or_else(|error| panic!("cycle {cycle}/{cycles}: start real DSH: {error}"));
+            assert_eq!(running.phase, DshPhase::Running);
+            let url = running.web_url.expect("managed web URL");
+            assert!(
+                http_health(&url),
+                "cycle {cycle}/{cycles}: health endpoint must return HTTP 200"
+            );
 
-        let stopped = stop_dsh_blocking(shared.clone()).expect("stop real DSH");
-        assert_eq!(stopped.phase, DshPhase::Stopped);
-        assert!(!http_health(&url), "health endpoint must be closed");
-        assert!(
-            shared
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .managed
-                .is_none(),
-            "managed process and Job handle must be released"
-        );
+            let stopped = stop_dsh_blocking(shared.clone())
+                .unwrap_or_else(|error| panic!("cycle {cycle}/{cycles}: stop real DSH: {error}"));
+            assert_eq!(stopped.phase, DshPhase::Stopped);
+            assert!(
+                !http_health(&url),
+                "cycle {cycle}/{cycles}: health endpoint must be closed"
+            );
+            assert!(
+                shared
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .managed
+                    .is_none(),
+                "cycle {cycle}/{cycles}: managed process and Job handle must be released"
+            );
+            if cycle % 10 == 0 || cycle == cycles {
+                eprintln!("completed lifecycle cycle {cycle}/{cycles}");
+            }
+        }
 
         fs::remove_dir_all(&test_root).expect("remove isolated DSH_HOME");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires the locally installed DSH runtime"]
+    fn production_health_failure_rolls_back_to_previous_runtime() {
+        let active_pointer = std::env::var_os("DSH_LAUNCHER_UPDATE_FAULT_ACTIVE_POINTER")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"D:\Tools\dsh-launcher\active.json"));
+        let source = runtime_manager::read_record(&active_pointer)
+            .expect("read active Runtime for production health fault test");
+        assert!(
+            runtime_manager::record_valid(&source),
+            "active Runtime must be valid"
+        );
+
+        let test_root = std::env::var_os("DSH_LAUNCHER_UPDATE_FAULT_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                runtime_manager::cache_root()
+                    .join("tests")
+                    .join(format!("update-health-fault-{}", now_ms()))
+            });
+        let manager_root = test_root.join("manager");
+        let dsh_home = test_root.join("dsh-home");
+        let workspace = test_root.join("workspace");
+        let old_root = manager_root.join("versions/old");
+        let failing_root = manager_root.join("versions/failing");
+        for directory in [&dsh_home, &workspace, &old_root, &failing_root] {
+            fs::create_dir_all(directory).expect("create update fault test directory");
+        }
+        let failing_entry = failing_root.join("fail-before-health.mjs");
+        fs::write(&failing_entry, b"process.exit(42);\n").expect("write failing DSH entry module");
+
+        let old = RuntimeRecord {
+            id: "fault-old".to_string(),
+            dsh_home: dsh_home.display().to_string(),
+            workspace: workspace.display().to_string(),
+            ..source.clone()
+        };
+        let failing = RuntimeRecord {
+            id: "fault-new".to_string(),
+            dsh_version: "99.0.0-fault".to_string(),
+            recipe_id: "production-health-fault".to_string(),
+            dsh_entry: failing_entry.display().to_string(),
+            dsh_home: dsh_home.display().to_string(),
+            workspace: workspace.display().to_string(),
+            package_integrity: "sha512-production-health-fault".to_string(),
+            smoke_tested: true,
+            installed_at_ms: now_ms(),
+            ..source.clone()
+        };
+        runtime_manager::atomic_write_json(&old_root.join("runtime.json"), &old)
+            .expect("write old Runtime record");
+        runtime_manager::atomic_write_json(&failing_root.join("runtime.json"), &failing)
+            .expect("write failing Runtime record");
+        runtime_manager::atomic_write_json(&manager_root.join("active.json"), &old)
+            .expect("write old active pointer");
+
+        let switched = runtime_manager::switch_to(&manager_root, &failing.id)
+            .expect("switch to production-health fault Runtime");
+        assert_eq!(switched.id, failing.id);
+        assert_eq!(
+            runtime_manager::read_record(&manager_root.join("previous.json"))
+                .expect("previous pointer after switch"),
+            old
+        );
+
+        let bridge_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("dsh-bridge.mjs");
+        let shared = Arc::new(Mutex::new(Supervisor {
+            phase: DshPhase::Stopped,
+            runtime: detect_runtime(Some(&switched)),
+            bridge_path,
+            managed: None,
+            web_url: None,
+            last_error: None,
+            logs: VecDeque::new(),
+            version_manager: version_manager_for_test(
+                &manager_root,
+                &runtime_manager::cache_root(),
+            ),
+            runtime_update_config: RuntimeUpdateConfig {
+                schema_version: 1,
+                enabled: false,
+                manifest_url: String::new(),
+                key_id: String::new(),
+                public_key: String::new(),
+            },
+            secure_update: SecureUpdateSnapshot::new(false),
+            available_update: None,
+            pending_update: None,
+        }));
+
+        let start_error = start_dsh_blocking(shared.clone())
+            .expect_err("failing Runtime must not pass production health check");
+        assert!(
+            start_error.contains("健康检查前退出"),
+            "unexpected production health error: {start_error}"
+        );
+        let restored = runtime_manager::rollback(&manager_root).expect("rollback old Runtime");
+        assert_eq!(restored.id, old.id);
+        {
+            let mut supervisor = shared
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            supervisor.runtime = detect_runtime(Some(&restored));
+            supervisor.phase = DshPhase::Stopped;
+            supervisor.last_error = None;
+        }
+        let running =
+            start_dsh_blocking(shared.clone()).expect("restart old Runtime after rollback");
+        let restored_url = running.web_url.expect("restored Runtime URL");
+        assert!(http_health(&restored_url));
+        let stopped = stop_dsh_blocking(shared.clone()).expect("stop restored Runtime");
+        assert_eq!(stopped.phase, DshPhase::Stopped);
+        assert!(!http_health(&restored_url));
+        assert_eq!(
+            runtime_manager::read_record(&manager_root.join("active.json"))
+                .expect("active pointer after rollback"),
+            old
+        );
+        eprintln!(
+            "production health rollback verified: rejected {}, restored {} / DSH {} / Node {}",
+            failing.id, old.id, source.dsh_version, source.node_version
+        );
+        fs::remove_dir_all(&test_root).expect("remove update fault test root");
     }
 
     #[test]

@@ -4,5 +4,6 @@ src-tauri/target/
 *.log
 .DS_Store
 release-assets/
+phase4-results/
 src-tauri/tauri.release.conf.json
 *.update-private-key

@@ -373,12 +373,16 @@ where
         Some(release.length()),
     );
 
-    let staging = root.join("staging").join(format!(
+    let staging_root = root.join("staging");
+    fs::create_dir_all(&staging_root)
+        .map_err(|error| format!("无法创建 Runtime staging 根目录：{error}"))?;
+    cleanup_stale_signed_runtime_staging(root, &release.release.dsh_version)?;
+    let staging = staging_root.join(format!(
         "signed-dsh-{}-{}",
         release.release.dsh_version,
         runtime_manager::now_ms()
     ));
-    fs::create_dir_all(&staging).map_err(|error| format!("无法创建 Runtime staging：{error}"))?;
+    fs::create_dir(&staging).map_err(|error| format!("无法创建 Runtime staging：{error}"))?;
     let mut guard = DirectoryGuard::new(staging.clone());
     extract_bundle(&bundle_path, &staging)?;
     let metadata: RuntimeBundleMetadata = serde_json::from_slice(
@@ -445,11 +449,7 @@ where
         smoke_tested: true,
         ..staged_record
     };
-    runtime_manager::atomic_write_json(&staging.join("runtime.json"), &final_record)?;
-    fs::create_dir_all(root.join("versions"))
-        .map_err(|error| format!("无法创建版本目录：{error}"))?;
-    fs::rename(&staging, &destination)
-        .map_err(|error| format!("无法原子激活旁路 Runtime 目录：{error}"))?;
+    commit_runtime_staging_after_record(&staging, &destination, &final_record, || {})?;
     guard.disarm();
     progress(
         100,
@@ -458,6 +458,59 @@ where
         Some(release.length()),
     );
     Ok(final_record)
+}
+
+fn commit_runtime_staging_after_record<F>(
+    staging: &Path,
+    destination: &Path,
+    record: &RuntimeRecord,
+    after_record: F,
+) -> Result<(), String>
+where
+    F: FnOnce(),
+{
+    runtime_manager::atomic_write_json(&staging.join("runtime.json"), record)?;
+    let versions = destination.parent().ok_or("Runtime 版本目录没有父目录。")?;
+    fs::create_dir_all(versions).map_err(|error| format!("无法创建版本目录：{error}"))?;
+    after_record();
+    fs::rename(staging, destination)
+        .map_err(|error| format!("无法原子激活旁路 Runtime 目录：{error}"))
+}
+
+fn cleanup_stale_signed_runtime_staging(root: &Path, version: &str) -> Result<usize, String> {
+    let staging_root = root.join("staging");
+    if !staging_root.is_dir() {
+        return Ok(0);
+    }
+    let prefix = format!("signed-dsh-{version}-");
+    let mut removed = 0_usize;
+    for entry in fs::read_dir(&staging_root)
+        .map_err(|error| format!("无法读取 Runtime staging 根目录：{error}"))?
+    {
+        let entry = entry.map_err(|error| format!("无法读取 Runtime staging 条目：{error}"))?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some(timestamp) = name.strip_prefix(&prefix) else {
+            continue;
+        };
+        if timestamp.is_empty() || !timestamp.bytes().all(|byte| byte.is_ascii_digit()) {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(entry.path())
+            .map_err(|error| format!("无法检查 Runtime staging：{error}"))?;
+        if is_reparse_or_symlink(&metadata) || !metadata.is_dir() {
+            return Err(format!(
+                "Runtime staging 类型异常，拒绝自动清理：{}",
+                entry.path().display()
+            ));
+        }
+        fs::remove_dir_all(entry.path())
+            .map_err(|error| format!("无法清理中断的 Runtime staging：{error}"))?;
+        removed += 1;
+    }
+    Ok(removed)
 }
 
 fn download_bundle<P>(
@@ -473,12 +526,31 @@ where
         .send()
         .and_then(reqwest::blocking::Response::error_for_status)
         .map_err(|error| format!("Runtime Bundle 下载失败：{error}"))?;
-    if response
-        .content_length()
-        .is_some_and(|length| length != release.release.length)
-    {
+    let content_length = response.content_length();
+    persist_verified_bundle(
+        release,
+        destination,
+        content_length,
+        &mut response,
+        progress,
+    )
+}
+
+fn persist_verified_bundle<R, P>(
+    release: &VerifiedRuntimeRelease,
+    destination: &Path,
+    content_length: Option<u64>,
+    input: &mut R,
+    progress: &mut P,
+) -> Result<(), String>
+where
+    R: Read,
+    P: FnMut(u8, &str, u64, Option<u64>),
+{
+    if content_length.is_some_and(|length| length != release.release.length) {
         return Err("Runtime Bundle HTTP 长度与签名 manifest 不一致。".to_string());
     }
+    cleanup_stale_bundle_partials(destination)?;
     let temporary = destination.with_extension(format!("part-{}", runtime_manager::now_ms()));
     let mut output = OpenOptions::new()
         .write(true)
@@ -490,7 +562,7 @@ where
     let mut buffer = [0_u8; 128 * 1024];
     let result = (|| {
         loop {
-            let read = response
+            let read = input
                 .read(&mut buffer)
                 .map_err(|error| format!("读取 Runtime Bundle 失败：{error}"))?;
             if read == 0 {
@@ -533,19 +605,55 @@ where
         output
             .sync_all()
             .map_err(|error| format!("无法同步 Runtime Bundle：{error}"))?;
-        drop(output);
-        if destination.is_file() {
-            fs::remove_file(destination)
-                .map_err(|error| format!("无法替换旧的 Runtime Bundle 缓存：{error}"))?;
-        }
-        fs::rename(&temporary, destination)
-            .map_err(|error| format!("无法完成 Runtime Bundle 下载：{error}"))?;
         Ok(())
     })();
-    if result.is_err() {
+    drop(output);
+    if let Err(error) = result {
         let _ = fs::remove_file(&temporary);
+        return Err(error);
     }
-    result
+    runtime_manager::replace_file(&temporary, destination).inspect_err(|_| {
+        let _ = fs::remove_file(&temporary);
+    })
+}
+
+fn cleanup_stale_bundle_partials(destination: &Path) -> Result<usize, String> {
+    let parent = destination
+        .parent()
+        .ok_or("Runtime Bundle 缓存路径没有父目录。")?;
+    let stem = destination
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .ok_or("Runtime Bundle 缓存文件名无效。")?;
+    let prefix = format!("{stem}.part-");
+    let mut removed = 0_usize;
+    for entry in fs::read_dir(parent)
+        .map_err(|error| format!("无法读取 Runtime Bundle 缓存目录：{error}"))?
+    {
+        let entry = entry.map_err(|error| format!("无法读取 Runtime Bundle 缓存条目：{error}"))?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some(timestamp) = name.strip_prefix(&prefix) else {
+            continue;
+        };
+        if timestamp.is_empty() || !timestamp.bytes().all(|byte| byte.is_ascii_digit()) {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(entry.path())
+            .map_err(|error| format!("无法检查 Runtime Bundle 临时文件：{error}"))?;
+        if is_reparse_or_symlink(&metadata) || !metadata.is_file() {
+            return Err(format!(
+                "Runtime Bundle 临时路径类型异常，拒绝自动清理：{}",
+                entry.path().display()
+            ));
+        }
+        fs::remove_file(entry.path())
+            .map_err(|error| format!("无法清理中断的 Runtime Bundle 临时文件：{error}"))?;
+        removed += 1;
+    }
+    Ok(removed)
 }
 
 fn extract_bundle(archive_path: &Path, destination: &Path) -> Result<(), String> {
@@ -672,6 +780,10 @@ where
     }
     let backups = cache.join("backups");
     fs::create_dir_all(&backups).map_err(|error| format!("无法创建备份目录：{error}"))?;
+    let removed = cleanup_stale_backup_staging(&backups)?;
+    if removed > 0 {
+        progress(2, "已清理上次异常中断留下的备份 staging。");
+    }
     let name = format!("dsh-home-{}", runtime_manager::now_ms());
     let staging = backups.join(format!(".{name}.staging"));
     let destination = backups.join(name);
@@ -690,6 +802,46 @@ where
         .map_err(|error| format!("无法提交 DSH_HOME 备份：{error}"))?;
     guard.disarm();
     Ok(destination)
+}
+
+fn cleanup_stale_backup_staging(backups: &Path) -> Result<usize, String> {
+    let mut removed = 0_usize;
+    for entry in fs::read_dir(backups).map_err(|error| format!("无法读取备份目录：{error}"))?
+    {
+        let entry = entry.map_err(|error| format!("无法读取备份目录条目：{error}"))?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some(timestamp) = name
+            .strip_prefix(".dsh-home-")
+            .and_then(|value| value.strip_suffix(".staging"))
+        else {
+            continue;
+        };
+        if timestamp.is_empty() || !timestamp.bytes().all(|byte| byte.is_ascii_digit()) {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(entry.path())
+            .map_err(|error| format!("无法检查备份 staging：{error}"))?;
+        if is_reparse_or_symlink(&metadata) {
+            return Err(format!(
+                "备份 staging 是符号链接或重解析点，拒绝自动清理：{}",
+                entry.path().display()
+            ));
+        }
+        if metadata.is_dir() {
+            fs::remove_dir_all(entry.path())
+                .map_err(|error| format!("无法清理中断的备份 staging：{error}"))?;
+        } else if metadata.is_file() {
+            fs::remove_file(entry.path())
+                .map_err(|error| format!("无法清理中断的备份 staging 文件：{error}"))?;
+        } else {
+            return Err("备份 staging 类型不受支持，拒绝自动清理。".to_string());
+        }
+        removed += 1;
+    }
+    Ok(removed)
 }
 
 fn copy_tree_safely<P>(
@@ -929,6 +1081,29 @@ mod tests {
         .unwrap()
     }
 
+    fn fault_release(bundle_url: String, length: u64) -> VerifiedRuntimeRelease {
+        VerifiedRuntimeRelease {
+            release: RuntimeRelease {
+                channel: "recommended".to_string(),
+                dsh_version: "99.0.0-fault".to_string(),
+                node_version: "24.20.0".to_string(),
+                architecture: target_architecture().to_string(),
+                bundle_url,
+                length,
+                sha256: "0".repeat(64),
+                signature: BASE64.encode([0_u8; 64]),
+                package_integrity: "sha512-download-fault".to_string(),
+                recipe_id: "download-fault".to_string(),
+                min_launcher_version: "0.4.0".to_string(),
+                migration: MigrationPlan {
+                    required: false,
+                    id: "none".to_string(),
+                },
+            },
+            public_key: [0_u8; 32],
+        }
+    }
+
     #[test]
     fn accepts_signed_manifest_and_rejects_tampering_and_replay() {
         let root =
@@ -1008,6 +1183,303 @@ mod tests {
     }
 
     #[test]
+    fn interrupted_or_corrupted_download_never_replaces_verified_cache() {
+        let root =
+            std::env::temp_dir().join(format!("dsh-download-faults-{}", runtime_manager::now_ms()));
+        fs::create_dir_all(&root).unwrap();
+        let destination = root.join("runtime.zip");
+        fs::write(&destination, b"previous verified cache").unwrap();
+
+        let expected = b"new verified runtime bundle";
+        let signing = SigningKey::from_bytes(&[27_u8; 32]);
+        let digest = Sha256::digest(expected);
+        let mut signed_message = Vec::from(BUNDLE_SIGNATURE_DOMAIN);
+        signed_message.extend_from_slice(&digest);
+        let release = VerifiedRuntimeRelease {
+            release: RuntimeRelease {
+                channel: "recommended".to_string(),
+                dsh_version: "9.0.0".to_string(),
+                node_version: "24.20.0".to_string(),
+                architecture: target_architecture().to_string(),
+                bundle_url: "https://updates.example.test/runtime.zip".to_string(),
+                length: expected.len() as u64,
+                sha256: format!("{digest:x}"),
+                signature: BASE64.encode(signing.sign(&signed_message).to_bytes()),
+                package_integrity: "sha512-test".to_string(),
+                recipe_id: "test-recipe".to_string(),
+                min_launcher_version: "0.3.0".to_string(),
+                migration: MigrationPlan {
+                    required: false,
+                    id: "none".to_string(),
+                },
+            },
+            public_key: *signing.verifying_key().as_bytes(),
+        };
+
+        let mut interrupted = std::io::Cursor::new(&expected[..expected.len() / 2]);
+        assert!(
+            persist_verified_bundle(
+                &release,
+                &destination,
+                Some(expected.len() as u64),
+                &mut interrupted,
+                &mut |_, _, _, _| {},
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(&destination).unwrap(), b"previous verified cache");
+
+        let corrupted = vec![b'x'; expected.len()];
+        let mut corrupted = std::io::Cursor::new(corrupted);
+        assert!(
+            persist_verified_bundle(
+                &release,
+                &destination,
+                Some(expected.len() as u64),
+                &mut corrupted,
+                &mut |_, _, _, _| {},
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(&destination).unwrap(), b"previous verified cache");
+        assert!(
+            fs::read_dir(&root)
+                .unwrap()
+                .flatten()
+                .all(|entry| !entry.file_name().to_string_lossy().contains(".part-"))
+        );
+
+        let mut verified = std::io::Cursor::new(expected);
+        persist_verified_bundle(
+            &release,
+            &destination,
+            Some(expected.len() as u64),
+            &mut verified,
+            &mut |_, _, _, _| {},
+        )
+        .unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), expected);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn socket_disconnect_preserves_verified_cache_and_removes_partial() {
+        let root = std::env::temp_dir().join(format!(
+            "dsh-socket-disconnect-{}",
+            runtime_manager::now_ms()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let destination = root.join("runtime.zip");
+        fs::write(&destination, b"previous verified cache").unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let expected_length = 1024_u64;
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept download request");
+            let mut request = [0_u8; 2048];
+            let _ = stream.read(&mut request).expect("read download request");
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {expected_length}\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            stream.write_all(&vec![b'x'; 128]).unwrap();
+            stream.flush().unwrap();
+        });
+        let release = fault_release(format!("http://{address}/runtime.zip"), expected_length);
+        assert!(download_bundle(&release, &destination, &mut |_, _, _, _| {}).is_err());
+        server.join().unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"previous verified cache");
+        assert_eq!(cleanup_stale_bundle_partials(&destination).unwrap(), 0);
+        assert!(
+            fs::read_dir(&root)
+                .unwrap()
+                .flatten()
+                .all(|entry| !entry.file_name().to_string_lossy().contains(".part-"))
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn download_process_kill_preserves_verified_cache_and_partial_is_recoverable() {
+        const HELPER_ENV: &str = "DSH_LAUNCHER_DOWNLOAD_CRASH_HELPER";
+        const ROOT_ENV: &str = "DSH_LAUNCHER_DOWNLOAD_CRASH_ROOT";
+        let helper = std::env::var_os(HELPER_ENV).as_deref() == Some(std::ffi::OsStr::new("1"));
+        let root = std::env::var_os(ROOT_ENV)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::temp_dir().join(format!(
+                    "dsh-download-process-kill-{}",
+                    runtime_manager::now_ms()
+                ))
+            });
+        let destination = root.join("runtime.zip");
+        let ready = root.join("download-ready");
+        if helper {
+            struct BlockingDownload {
+                ready: PathBuf,
+                first: bool,
+            }
+            impl Read for BlockingDownload {
+                fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                    if self.first {
+                        self.first = false;
+                        fs::write(&self.ready, b"ready")?;
+                        let length = buffer.len().min(64 * 1024);
+                        buffer[..length].fill(b'x');
+                        return Ok(length);
+                    }
+                    std::thread::sleep(Duration::from_secs(300));
+                    Ok(0)
+                }
+            }
+            let release = fault_release(
+                "https://updates.example.test/runtime.zip".to_string(),
+                1024 * 1024,
+            );
+            let mut input = BlockingDownload { ready, first: true };
+            persist_verified_bundle(
+                &release,
+                &destination,
+                Some(release.length()),
+                &mut input,
+                &mut |_, _, _, _| {},
+            )
+            .expect("download helper must be killed while blocked");
+            unreachable!();
+        }
+
+        fs::create_dir_all(&root).unwrap();
+        fs::write(&destination, b"previous verified cache").unwrap();
+        let current_test = std::env::current_exe().expect("current unit test executable");
+        let mut child = std::process::Command::new(current_test)
+            .args([
+                "--exact",
+                "runtime_update::tests::download_process_kill_preserves_verified_cache_and_partial_is_recoverable",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(HELPER_ENV, "1")
+            .env(ROOT_ENV, &root)
+            .spawn()
+            .expect("spawn download crash helper");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !ready.is_file() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            ready.is_file(),
+            "download helper did not reach streaming state"
+        );
+        child.kill().expect("kill download helper process");
+        let status = child.wait().expect("wait for killed download helper");
+        assert!(!status.success());
+        assert_eq!(fs::read(&destination).unwrap(), b"previous verified cache");
+        assert_eq!(cleanup_stale_bundle_partials(&destination).unwrap(), 1);
+        assert_eq!(fs::read(&destination).unwrap(), b"previous verified cache");
+        assert!(
+            fs::read_dir(&root)
+                .unwrap()
+                .flatten()
+                .all(|entry| !entry.file_name().to_string_lossy().contains(".part-"))
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn signed_runtime_staging_process_crash_preserves_active_and_recovers() {
+        const HELPER_ENV: &str = "DSH_LAUNCHER_STAGING_CRASH_HELPER";
+        const ROOT_ENV: &str = "DSH_LAUNCHER_STAGING_CRASH_ROOT";
+        let helper = std::env::var_os(HELPER_ENV).as_deref() == Some(std::ffi::OsStr::new("1"));
+        let root = std::env::var_os(ROOT_ENV)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::temp_dir().join(format!(
+                    "dsh-signed-staging-crash-{}",
+                    runtime_manager::now_ms()
+                ))
+            });
+        let staging = root.join("staging/signed-dsh-2.0.0-12345");
+        let destination = root.join("versions/dsh-2.0.0");
+        let home = root.join("home");
+        let workspace = root.join("workspace");
+        let candidate = RuntimeRecord {
+            schema_version: 1,
+            id: "signed-2.0.0".to_string(),
+            dsh_version: "2.0.0".to_string(),
+            node_version: "24.20.0".to_string(),
+            channel: "recommended".to_string(),
+            recipe_id: "signed-staging-crash".to_string(),
+            node_path: destination.join("node.exe").display().to_string(),
+            dsh_entry: destination.join("bin.js").display().to_string(),
+            dsh_home: home.display().to_string(),
+            workspace: workspace.display().to_string(),
+            package_integrity: "sha512-signed-staging-crash".to_string(),
+            managed: true,
+            smoke_tested: true,
+            installed_at_ms: runtime_manager::now_ms(),
+        };
+        if helper {
+            commit_runtime_staging_after_record(&staging, &destination, &candidate, || {
+                std::process::exit(89)
+            })
+            .expect("staging helper must terminate before directory commit");
+            unreachable!();
+        }
+
+        let old_root = root.join("versions/dsh-1.0.0");
+        for directory in [&staging, &old_root, &home, &workspace] {
+            fs::create_dir_all(directory).expect("signed staging crash directory");
+        }
+        fs::write(staging.join("node.exe"), b"new node").unwrap();
+        fs::write(staging.join("bin.js"), b"new entry").unwrap();
+        fs::write(old_root.join("node.exe"), b"old node").unwrap();
+        fs::write(old_root.join("bin.js"), b"old entry").unwrap();
+        let active = RuntimeRecord {
+            id: "signed-1.0.0".to_string(),
+            dsh_version: "1.0.0".to_string(),
+            recipe_id: "old-active".to_string(),
+            node_path: old_root.join("node.exe").display().to_string(),
+            dsh_entry: old_root.join("bin.js").display().to_string(),
+            package_integrity: "sha512-old-active".to_string(),
+            ..candidate.clone()
+        };
+        runtime_manager::atomic_write_json(&root.join("active.json"), &active).unwrap();
+
+        let current_test = std::env::current_exe().expect("current unit test executable");
+        let status = std::process::Command::new(current_test)
+            .args([
+                "--exact",
+                "runtime_update::tests::signed_runtime_staging_process_crash_preserves_active_and_recovers",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(HELPER_ENV, "1")
+            .env(ROOT_ENV, &root)
+            .status()
+            .expect("run signed staging crash helper");
+        assert_eq!(status.code(), Some(89));
+        assert!(staging.join("runtime.json").is_file());
+        assert!(!destination.exists());
+        assert_eq!(
+            runtime_manager::read_record(&root.join("active.json")).unwrap(),
+            active
+        );
+        assert!(runtime_manager::record_valid(&active));
+        assert_eq!(
+            cleanup_stale_signed_runtime_staging(&root, "2.0.0").unwrap(),
+            1
+        );
+        assert!(!staging.exists());
+        assert!(!destination.exists());
+        assert_eq!(
+            runtime_manager::read_record(&root.join("active.json")).unwrap(),
+            active
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn rejects_runtime_bundle_path_escape() {
         let root =
             std::env::temp_dir().join(format!("dsh-unsafe-bundle-{}", runtime_manager::now_ms()));
@@ -1063,6 +1535,100 @@ mod tests {
         );
         assert!(!backup.join("profiles/node_modules").exists());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn backup_process_crash_preserves_active_runtime_and_staging_is_recoverable() {
+        const HELPER_ENV: &str = "DSH_LAUNCHER_BACKUP_CRASH_HELPER";
+        const ROOT_ENV: &str = "DSH_LAUNCHER_BACKUP_CRASH_ROOT";
+        let helper = std::env::var_os(HELPER_ENV).as_deref() == Some(std::ffi::OsStr::new("1"));
+        let root = std::env::var_os(ROOT_ENV)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::temp_dir().join(format!(
+                    "dsh-backup-process-crash-{}",
+                    runtime_manager::now_ms()
+                ))
+            });
+        let cache = root.join("cache");
+        let home = root.join("home");
+        if helper {
+            backup_dsh_home(&cache, &home, |percent, _| {
+                if percent == 48 {
+                    std::process::exit(87);
+                }
+            })
+            .expect("backup helper must be terminated before returning");
+            unreachable!();
+        }
+
+        let manager = root.join("manager");
+        let runtime = root.join("runtime");
+        let workspace = root.join("workspace");
+        for directory in [&home, &manager, &runtime, &workspace] {
+            fs::create_dir_all(directory).expect("backup crash test directory");
+        }
+        fs::write(home.join("settings.yaml"), b"theme: system\n").expect("test home file");
+        fs::write(runtime.join("node.exe"), b"node").expect("test node");
+        fs::write(runtime.join("bin.js"), b"entry").expect("test DSH entry");
+        let active = RuntimeRecord {
+            schema_version: 1,
+            id: "active-before-backup-crash".to_string(),
+            dsh_version: "1.0.0".to_string(),
+            node_version: "24.20.0".to_string(),
+            channel: "recommended".to_string(),
+            recipe_id: "backup-crash-test".to_string(),
+            node_path: runtime.join("node.exe").display().to_string(),
+            dsh_entry: runtime.join("bin.js").display().to_string(),
+            dsh_home: home.display().to_string(),
+            workspace: workspace.display().to_string(),
+            package_integrity: "sha512-backup-crash-test".to_string(),
+            managed: true,
+            smoke_tested: true,
+            installed_at_ms: runtime_manager::now_ms(),
+        };
+        runtime_manager::atomic_write_json(&manager.join("active.json"), &active)
+            .expect("active pointer before backup crash");
+
+        let current_test = std::env::current_exe().expect("current unit test executable");
+        let status = std::process::Command::new(current_test)
+            .args([
+                "--exact",
+                "runtime_update::tests::backup_process_crash_preserves_active_runtime_and_staging_is_recoverable",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(HELPER_ENV, "1")
+            .env(ROOT_ENV, &root)
+            .status()
+            .expect("run backup crash helper process");
+        assert_eq!(status.code(), Some(87));
+        assert_eq!(
+            runtime_manager::read_record(&manager.join("active.json"))
+                .expect("active pointer after backup crash"),
+            active
+        );
+        assert!(runtime_manager::record_valid(&active));
+
+        let backups = cache.join("backups");
+        let interrupted: Vec<_> = fs::read_dir(&backups)
+            .expect("backup directory after crash")
+            .flatten()
+            .collect();
+        assert_eq!(interrupted.len(), 1, "only interrupted staging may remain");
+        assert!(
+            interrupted[0]
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".staging")
+        );
+        assert_eq!(cleanup_stale_backup_staging(&backups).unwrap(), 1);
+        assert_eq!(fs::read_dir(&backups).unwrap().count(), 0);
+        assert_eq!(
+            runtime_manager::read_record(&manager.join("active.json")).unwrap(),
+            active
+        );
+        fs::remove_dir_all(root).expect("cleanup backup crash test root");
     }
 
     #[test]

@@ -1,0 +1,61 @@
+name: Phase 4 installer smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unsigned-installer-smoke:
+    runs-on: windows-latest
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install locked frontend dependencies
+        run: npm ci
+
+      - name: Run checks
+        shell: pwsh
+        run: |
+          npm run build
+          cargo fmt --manifest-path ./src-tauri/Cargo.toml --check
+          cargo test --manifest-path ./src-tauri/Cargo.toml
+
+      - name: Build unsigned NSIS installer
+        shell: pwsh
+        run: |
+          npm run tauri -- build `
+            --config src-tauri/tauri.phase4.conf.json `
+            --bundles nsis `
+            --no-sign `
+            --ci
+
+      - name: Test silent install and uninstall
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem './src-tauri/target/release/bundle/nsis/*.exe' -File -ErrorAction Stop
+          if (@($installer).Count -ne 1) { throw 'Expected exactly one NSIS installer.' }
+          ./scripts/test-installer.ps1 `
+            -InstallerPath $installer.FullName `
+            -TestRoot (Join-Path $env:RUNNER_TEMP 'dsh-installer-smoke') `
+            -ReportPath (Join-Path $env:RUNNER_TEMP 'phase4-installer-smoke.json') `
+            -IsolatedEnvironment
+
+      - name: Upload installer and smoke report
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase4-unsigned-installer-smoke
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            ${{ runner.temp }}/phase4-installer-smoke.json

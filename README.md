@@ -1,6 +1,8 @@
 # DSH Launcher
 
 一个面向 Windows 的非官方 DeepSeek Harness 本地启动器，使用 Tauri 2、React、TypeScript 与 Rust 构建。
+本项目独立开发和维护，未经 DeepSeek 审核、赞助或背书；上游目前仍处于 developer preview，兼容性可能发生破坏性变化。
+In English: this is an unofficial, independently developed project; it is not reviewed, sponsored, or endorsed by DeepSeek.
 
 ## 当前能力
 
@@ -38,3 +40,11 @@ Runtime Bundle 更新期间执行 `npm install` 或网络生命周期脚本。
 ## 许可
 
 MIT。详见 [LICENSE](LICENSE)。DeepSeek Harness 及相关标识归其各自权利人所有；本项目为非官方项目。
+第三方依赖清单见 [docs/THIRD_PARTY_NOTICES.md](docs/THIRD_PARTY_NOTICES.md)，发布身份与许可证复核见
+[docs/RELEASE_REVIEW.md](docs/RELEASE_REVIEW.md)。
+
+## Code signing policy
+
+Windows 发布制品通过 SignPath 的受信构建流水线签名。Free code signing provided by
+[SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/)。团队角色、
+审批边界、隐私和双阶段签名顺序见 [docs/CODE_SIGNING_POLICY.md](docs/CODE_SIGNING_POLICY.md)。

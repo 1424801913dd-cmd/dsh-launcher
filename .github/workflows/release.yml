@@ -19,22 +19,46 @@ on:
         required: true
 
 permissions:
+  actions: read
   contents: write
+
+concurrency:
+  group: signed-release-windows
+  cancel-in-progress: false
 
 jobs:
   release-windows:
+    if: github.ref == 'refs/heads/main'
     runs-on: windows-latest
     env:
       CARGO_TERM_COLOR: always
-      DSH_RUNTIME_SIGNING_PRIVATE_KEY: ${{ secrets.DSH_RUNTIME_SIGNING_PRIVATE_KEY }}
-      DSH_RUNTIME_PUBLIC_KEY: ${{ secrets.DSH_RUNTIME_PUBLIC_KEY }}
-      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-      TAURI_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
       DSH_LAUNCHER_UPDATE_ENABLED: "true"
+      SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+      SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+      SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+      SIGNPATH_EXECUTABLE_ARTIFACT_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_EXECUTABLE_ARTIFACT_CONFIGURATION_SLUG }}
+      SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG }}
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Validate SignPath release configuration
+        shell: pwsh
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+        run: |
+          $required = @{
+            SIGNPATH_API_TOKEN = $env:SIGNPATH_API_TOKEN
+            SIGNPATH_ORGANIZATION_ID = $env:SIGNPATH_ORGANIZATION_ID
+            SIGNPATH_PROJECT_SLUG = $env:SIGNPATH_PROJECT_SLUG
+            SIGNPATH_SIGNING_POLICY_SLUG = $env:SIGNPATH_SIGNING_POLICY_SLUG
+            SIGNPATH_EXECUTABLE_ARTIFACT_CONFIGURATION_SLUG = $env:SIGNPATH_EXECUTABLE_ARTIFACT_CONFIGURATION_SLUG
+            SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG = $env:SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG
+          }
+          $missing = @($required.GetEnumerator() | Where-Object { [string]::IsNullOrWhiteSpace($_.Value) } | ForEach-Object Key)
+          if ($missing.Count -gt 0) {
+            throw "Missing SignPath repository configuration: $($missing -join ', ')"
+          }
 
       - uses: actions/setup-node@v4
         with:
@@ -54,6 +78,18 @@ jobs:
           -Channel '${{ inputs.channel }}'
           -OutputDirectory './release-assets'
 
+      - name: Enforce Runtime license review gate
+        shell: pwsh
+        run: |
+          $version = '${{ inputs.dsh_version }}'
+          $reportPath = "./release-assets/dsh-$version-windows-x86_64.license-audit.json"
+          $report = Get-Content -LiteralPath $reportPath -Raw -Encoding UTF8 | ConvertFrom-Json
+          $unresolved = @($report.unresolvedReviewRequired)
+          if ($unresolved.Count -gt 0) {
+            $summary = $unresolved | ForEach-Object { "$($_.name)@$($_.version) ($($_.license))" }
+            throw "Runtime release has unresolved license obligations: $($summary -join ', ')"
+          }
+
       - name: Download previous signed channel manifest when present
         shell: pwsh
         env:
@@ -68,6 +104,9 @@ jobs:
 
       - name: Sign Runtime Bundle and anti-replay manifest
         shell: pwsh
+        env:
+          DSH_RUNTIME_SIGNING_PRIVATE_KEY: ${{ secrets.DSH_RUNTIME_SIGNING_PRIVATE_KEY }}
+          DSH_RUNTIME_PUBLIC_KEY: ${{ secrets.DSH_RUNTIME_PUBLIC_KEY }}
         run: |
           $version = '${{ inputs.dsh_version }}'
           $asset = "dsh-$version-windows-x86_64.runtime.zip"
@@ -87,6 +126,7 @@ jobs:
         shell: pwsh
         env:
           DSH_LAUNCHER_UPDATE_ENDPOINT: https://github.com/${{ github.repository }}/releases/latest/download/latest.json
+          TAURI_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
         run: node ./scripts/prepare-tauri-release-config.mjs
 
       - name: Run checks
@@ -95,16 +135,159 @@ jobs:
           npm run build
           cargo test --manifest-path ./src-tauri/Cargo.toml
 
-      - name: Build and publish signed launcher updater
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+      - name: Prepare release copy
+        shell: pwsh
+        run: |
+          $launcherVersion = node -p "require('./package.json').version"
+          $body = Get-Content -LiteralPath './docs/RELEASE_TEMPLATE.md' -Raw -Encoding UTF8
+          $body = $body.Replace('{{LAUNCHER_VERSION}}', $launcherVersion)
+          $body = $body.Replace('{{RUNTIME_CHANNEL}}', '${{ inputs.channel }}')
+          $body = $body.Replace('{{DSH_VERSION}}', '${{ inputs.dsh_version }}')
+          New-Item -ItemType Directory -Force -Path './release-assets' | Out-Null
+          [System.IO.File]::WriteAllText(
+            (Join-Path (Resolve-Path './release-assets').Path 'release-body.md'),
+            $body + [Environment]::NewLine,
+            [System.Text.UTF8Encoding]::new($false)
+          )
+
+      - name: Build unsigned prebundle and finalize executable metadata
+        shell: pwsh
+        run: npm run tauri -- build --bundles nsis --no-sign --ci --config src-tauri/tauri.release.conf.json
+
+      - name: Stage unsigned launcher executable
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path './signpath-input/executable' | Out-Null
+          Copy-Item -LiteralPath './src-tauri/target/release/dsh-launcher.exe' -Destination './signpath-input/executable/dsh-launcher.exe'
+
+      - name: Upload unsigned launcher executable
+        id: upload_unsigned_executable
+        uses: actions/upload-artifact@v4
         with:
-          tagName: app-v__VERSION__
-          releaseName: DSH Launcher v__VERSION__
-          releaseDraft: true
-          prerelease: false
-          args: --config src-tauri/tauri.release.conf.json
+          name: signpath-unsigned-executable-${{ github.run_id }}
+          path: signpath-input/executable/dsh-launcher.exe
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Sign launcher executable through SignPath Foundation
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_EXECUTABLE_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.upload_unsigned_executable.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: ${{ github.workspace }}/signpath-output/executable
+
+      - name: Verify and install signed launcher executable
+        shell: pwsh
+        run: |
+          $signed = @(Get-ChildItem -LiteralPath './signpath-output/executable' -Filter 'dsh-launcher.exe' -File -Recurse)
+          if ($signed.Count -ne 1) { throw "Expected one signed launcher executable, found $($signed.Count)." }
+          ./scripts/verify-authenticode.ps1 -Path $signed[0].FullName -RequireTimestamp `
+            -ReportPath './release-assets/dsh-launcher.authenticode.json'
+          Copy-Item -LiteralPath $signed[0].FullName -Destination './src-tauri/target/release/dsh-launcher.exe' -Force
+
+      - name: Rebundle NSIS around the signed executable
+        shell: pwsh
+        run: npm run tauri -- bundle --bundles nsis --no-sign --ci --config src-tauri/tauri.release.conf.json
+
+      - name: Stage unsigned NSIS installer
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          $installers = @(Get-ChildItem -LiteralPath './src-tauri/target/release/bundle/nsis' -Filter '*-setup.exe' -File)
+          if ($installers.Count -ne 1) { throw "Expected one NSIS installer, found $($installers.Count)." }
+          New-Item -ItemType Directory -Force -Path './signpath-input/installer' | Out-Null
+          Copy-Item -LiteralPath $installers[0].FullName -Destination "./signpath-input/installer/DSH.Launcher_${version}_x64-setup.exe"
+
+      - name: Upload unsigned NSIS installer
+        id: upload_unsigned_installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: signpath-unsigned-installer-${{ github.run_id }}
+          path: signpath-input/installer/*.exe
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Sign NSIS installer through SignPath Foundation
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.upload_unsigned_installer.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: ${{ github.workspace }}/signpath-output/installer
+
+      - name: Verify signed installer and run release gates
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          $name = "DSH.Launcher_${version}_x64-setup.exe"
+          $signed = @(Get-ChildItem -LiteralPath './signpath-output/installer' -Filter $name -File -Recurse)
+          if ($signed.Count -ne 1) { throw "Expected one signed NSIS installer, found $($signed.Count)." }
+          ./scripts/verify-authenticode.ps1 -Path $signed[0].FullName -RequireTimestamp `
+            -ReportPath './release-assets/installer.authenticode.json'
+          Copy-Item -LiteralPath $signed[0].FullName -Destination "./release-assets/$name" -Force
+          $bundleInstaller = @(Get-ChildItem -LiteralPath './src-tauri/target/release/bundle/nsis' -Filter '*-setup.exe' -File)
+          Copy-Item -LiteralPath $signed[0].FullName -Destination $bundleInstaller[0].FullName -Force
+          ./scripts/test-installer.ps1 -InstallerPath $signed[0].FullName `
+            -TestRoot '${{ runner.temp }}/dsh-launcher-installer-test' `
+            -ReportPath './release-assets/installer-smoke.json' -IsolatedEnvironment -RequireAuthenticode
+          ./scripts/phase4-check.ps1 -RequireAuthenticode -RequireInstaller -RequireLicenseReview `
+            -ReportPath './release-assets/release-gate.json'
+
+      - name: Create updater archive, signature, and manifest
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          $version = node -p "require('./package.json').version"
+          $installerName = "DSH.Launcher_${version}_x64-setup.exe"
+          $archiveName = "DSH.Launcher_${version}_x64-setup.nsis.zip"
+          Compress-Archive -LiteralPath "./release-assets/$installerName" -DestinationPath "./release-assets/$archiveName" -CompressionLevel Optimal
+          npm run tauri -- signer sign "./release-assets/$archiveName"
+          node ./scripts/prepare-tauri-update-manifest.mjs `
+            --version $version `
+            --repository '${{ github.repository }}' `
+            --archive-name $archiveName `
+            --signature "./release-assets/$archiveName.sig" `
+            --notes './release-assets/release-body.md' `
+            --output './release-assets/latest.json'
+
+      - name: Create or update draft launcher release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = node -p "require('./package.json').version"
+          $tag = "app-v$version"
+          $installerName = "DSH.Launcher_${version}_x64-setup.exe"
+          $archiveName = "DSH.Launcher_${version}_x64-setup.nsis.zip"
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release edit $tag --draft --title "DSH Launcher v$version" --notes-file './release-assets/release-body.md'
+          } else {
+            $global:LASTEXITCODE = 0
+            gh release create $tag --draft --title "DSH Launcher v$version" --notes-file './release-assets/release-body.md' --target '${{ github.sha }}'
+          }
+          gh release upload $tag `
+            "./release-assets/$installerName" `
+            "./release-assets/$archiveName" `
+            "./release-assets/$archiveName.sig" `
+            './release-assets/latest.json' `
+            './release-assets/dsh-launcher.authenticode.json' `
+            './release-assets/installer.authenticode.json' `
+            './release-assets/installer-smoke.json' `
+            './release-assets/release-gate.json' --clobber
 
       - name: Publish Runtime channel assets
         shell: pwsh
@@ -117,4 +300,5 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             gh release create runtime-channels --title 'DSH Runtime signed channels' --notes 'Machine-consumed signed Runtime assets.' --latest=false
           }
-          gh release upload runtime-channels $asset './release-assets/runtime-manifest.json' --clobber
+          $licenseAudit = "./release-assets/dsh-$version-windows-x86_64.license-audit.json"
+          gh release upload runtime-channels $asset './release-assets/runtime-manifest.json' $licenseAudit --clobber

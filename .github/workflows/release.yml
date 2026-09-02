@@ -70,6 +70,16 @@ jobs:
       - name: Install locked frontend dependencies
         run: npm ci
 
+      - name: Prepare LGPL source-materials archive
+        shell: pwsh
+        run: |
+          # Corresponding-source archive for the Runtime's libvips static DLL family
+          # (reviewed manifest scripts/data/lgpl-source-manifest.json; see docs/LGPL_REVIEW.md).
+          # Downloads every entry and verifies the pinned SHA-256; fails closed on mismatch.
+          # Runs before the Runtime license audit so the audit can resolve the sharp
+          # disposition from a complete archive.
+          ./scripts/prepare-lgpl-source-materials.ps1 -OutputDir './release-assets'
+
       - name: Build verified Runtime Bundle from pinned recipe
         shell: pwsh
         run: >-
@@ -287,6 +297,8 @@ jobs:
             './release-assets/dsh-launcher.authenticode.json' `
             './release-assets/installer.authenticode.json' `
             './release-assets/installer-smoke.json' `
+            './release-assets/lgpl-source-materials-vips-8.18.6.tar.gz' `
+            './release-assets/lgpl-source-materials-vips-8.18.6.tar.gz.json' `
             './release-assets/release-gate.json' --clobber
 
       - name: Publish Runtime channel assets

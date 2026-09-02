@@ -5,5 +5,7 @@ src-tauri/target/
 .DS_Store
 release-assets/
 phase4-results/
+.tmp-lgpl-review/
+DSH Launcher/
 src-tauri/tauri.release.conf.json
 *.update-private-key

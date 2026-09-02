@@ -13,7 +13,7 @@ The audit flags copyleft or source-availability license families for explicit re
 | dtoa-short | 0.3.5 | MPL-2.0 | documented-source-availability | [source](https://crates.io/crates/dtoa-short/0.3.5) |
 | option-ext | 0.2.0 | MPL-2.0 | documented-source-availability | [source](https://crates.io/crates/option-ext/0.2.0) |
 | selectors | 0.36.1 | MPL-2.0 | documented-source-availability | [source](https://crates.io/crates/selectors/0.36.1) |
-| @img/sharp-win32-x64 | 0.35.4 | Apache-2.0 AND LGPL-3.0-or-later | manual-review-required | [source](https://github.com/lovell/sharp-libvips) |
+| @img/sharp-win32-x64 | 0.35.4 | Apache-2.0 AND LGPL-3.0-or-later | documented-source-availability | [source](https://github.com/lovell/sharp-libvips) |
 
 ## DSH Launcher JavaScript production dependencies
 

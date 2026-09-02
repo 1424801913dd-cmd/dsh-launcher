@@ -23,6 +23,8 @@ Uninstalling the launcher removes the application and shortcuts but intentionall
 
 DSH Launcher is MIT licensed. `THIRD_PARTY_NOTICES.md` and `RELEASE_REVIEW.md` are included in the installed `resources` directory. Each separately signed Runtime bundle includes its actual Windows x64 dependency notice, Node.js license, GNU GPL/LGPL texts, native package notices, and a versioned source/build-material index.
 
+For the Runtime's libvips Windows x64 static DLL family, a corresponding-source archive is attached to this release as `lgpl-source-materials-vips-8.18.6.tar.gz` (plus `lgpl-source-materials-vips-8.18.6.tar.gz.json` with its SHA-256 and build provenance). See [docs/LGPL_REVIEW.md](https://github.com/1424801913dd-cmd/dsh-launcher/blob/main/docs/LGPL_REVIEW.md) for the manual review record.
+
 This draft must remain unpublished while any release quality gate reports `FAIL`.
 
 ## Code signing policy

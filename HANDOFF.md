@@ -1111,7 +1111,9 @@ Authenticode、干净虚拟机和发布验收完成前，不得把本地 `0.4.0`
   配置 SignPath project/policy/artifact configuration 标识与最小权限 API token；
 - 对 NSIS 安装器和内部 EXE 完成 Authenticode 签名，验证签名链、时间戳、升级安装、卸载和数据保留；
 - 在无 Node、无 DSH、无开发工具的干净 Windows 10/11 x64 虚拟机执行矩阵测试；
-- 对 `@img/sharp-win32-x64` 及其预编译 LGPL 组件完成共享库替换/重链接材料、许可证全文与源码归档复核；
+- 对 `@img/sharp-win32-x64` 及其预编译 LGPL 组件完成共享库替换/重链接材料、许可证全文与源码归档复核——
+  2026-09-02 已按第二十二节完成人工复核与源码归档生成；剩余“归档随发布/接线 release.yml”为
+  所有者决策（见第二十二节.3）；
 - 将已完成的非官方身份与自有 Logo 边界落实到最终 Release 页面文案；
 - 记录真实 SmartScreen 观测。获得 Authenticode 签名不等于已经建立 SmartScreen 声誉。
 
@@ -1141,9 +1143,9 @@ Authenticode、干净虚拟机和发布验收完成前，不得把本地 `0.4.0`
   服务”作为证书能力通过条件，不再错误要求 GitHub runner 的本机证书库持有私钥；
 - 发布 job 只接受 `main`，并以 concurrency group 串行化，避免两个签名审批/同版本 draft 竞争；原先 job
   级注入的 Runtime/Tauri 私钥已收窄到各自唯一签名步骤，npm 安装、编译、SignPath 和安装测试不再继承；
-- 当前不能真实提交签名：SignPath Foundation 项目尚未申请/批准，GitHub 尚无 `SIGNPATH_API_TOKEN` 与五个
-  SignPath Variables。这是下一处需要仓库所有者介入的外部身份边界；不得用占位值、个人 PFX 或未签名
-  上传绕过；
+- 2026-09-01 项目所有者已通过 <https://signpath.org/apply> 成功提交 SignPath Foundation 免费订阅申请，
+  页面返回 `Form submitted`；当前等待 SignPath Foundation 审核与后续邮件。项目尚未获批，GitHub 仍无
+  `SIGNPATH_API_TOKEN` 与五个 SignPath Variables；不得用占位值、个人 PFX 或未签名上传绕过；
 - sharp/libvips 的 LGPL 人工复核仍位于任何 SignPath 请求之前，因此即使 SignPath 配置完成，许可证问题
   未解除时流水线也会在上传待签制品前失败关闭。
 - 本轮验证：release workflow 用 PyYAML 6.0.1 成功解析为 25 个 steps；三个 PowerShell 脚本与两个 Node
@@ -1154,3 +1156,62 @@ Authenticode、干净虚拟机和发布验收完成前，不得把本地 `0.4.0`
   `1DE85D15DAD6889C64223751F8D5AB65C589025157509EEB8F425993CB764EC0`；未签名 NSIS 为 2,154,531 字节，
   SHA-256 `5E7BA2FBDBF737A413D0EF144706B8A81CDFC1CACCF77A343E7116CD36EC5130`。两者仍是 `NotSigned`，不得公开；
   `DSH Launcher\` 中的生产 `0.3.3` 安装没有运行、覆盖或删除。
+
+## 二十二、LGPL 人工复核记录（2026-09-02）
+
+本节完善二十一.10 中 sharp/libvips LGPL 项的处置记录。完整备忘录见
+[docs/LGPL_REVIEW.md](docs/LGPL_REVIEW.md)，机器可核对清单见
+`scripts/data/lgpl-source-manifest.json`。
+
+### 1. 证据链（全部来自本机只读检查与 `.tmp-lgpl-review` 本地缓存）
+
+- 交付链：libvips 8.18.6 + 依赖 → `build-win64-mxe` v8.18.6（build.sh/container/build 配方/
+  overrides.mk + MXE `llvm-mingw` 分叉快照 `d973945bb92c7783d5afa41bb2b8d2e1a04eaba3`）→
+  `vips-dev-x64-web-8.18.6-static.zip` → `sharp-libvips` v1.3.3 `build/win.sh` →
+  `@img/sharp-win32-x64@0.35.4` 的 `lib/`；
+- 安装包 `versions.json` 记录 29 个组件精确版本（权威记录；注意 sharp-libvips v1.3.3
+  `versions.properties` 的 `VERSION_AOM=3.15.0` 与实际 `aom 3.14.1` 不一致，aom 非 copyleft，仅记录）；
+- 8 个 LGPL 类组件源码 tarball 的 SHA-256 与 build-win64-mxe 配方记录**逐一完全一致**（vips/glib/
+  pango/fribidi/libexif/librsvg/libheif/proxy-libintl，完整哈希见 manifest）；cairo 1.18.4 校验和
+  与 MXE `src/cairo.mk` 一致，已于 2026-09-02 下载并核验通过（MPL 2.0 口径），并入下方归档；
+- PE 导入表（`phase4-results/runtime-license-evidence.json`）确认 addon 只导入两个独立
+  libvips DLL；单元测试 `installed_runtime_record_does_not_pin_replaceable_native_library_hashes`
+  （`src-tauri/src/runtime_manager.rs:1235`）确认安装后不锚定 DLL 哈希。
+
+### 2. 四项检查结论
+
+1. **随附全文与声明**：机制成立（`Build-RuntimeBundle.ps1` 113–128 行放置 GPL-3.0/LGPL-3.0 全文与
+   `RUNTIME_LICENSES.md`，139–145 行生成 `THIRD_PARTY_NOTICES.md`）。**注意**：当前活动 Runtime
+   `signed-0.1.2-alpha.2` 的 `app/` 中没有这些文件（早于该机制），下一个发布 Bundle 必须由新
+   机制重建并以门禁重新证明；上游 npm 包内 `LICENSE` 仅 Apache-2.0 全文；
+2. **替换 DLL 不被阻止**：成立（三项独立证据，见上）；
+3. **源码/构建脚本/重链接材料**：成立（8 个组件源码校验和匹配 + 三层构建链快照 +
+   `vips-dev` 包含 include/ 与导入库使 DLL 可替换/可重链）；残余风险为
+   `base.Dockerfile` 以分支而非 commit 固定 MXE（工具链可复现性，源码身份不受影响）；
+4. **长期可用地址或随包归档**：**决策点**。推荐“随包归档”。
+
+### 3. 已产出与待办
+
+- 已产出 `scripts/prepare-lgpl-source-materials.ps1` + `scripts/data/lgpl-source-manifest.json`；
+  本机已生成归档（含全部 9 个组件源码，报告 `pendingSources: []`）：
+  `release-assets/lgpl-source-materials-vips-8.18.6.tar.gz`（79,683,793 字节，SHA-256
+  `5A6B85A33DA69292A08401C14279DDC3863EF678FE04FBA3E391F331B6981B1C`，含 9 个已核验源码 +
+  3 个构建链快照 + PROVENANCE.md + SHA256SUMS.txt，见
+  `release-assets/lgpl-source-materials-vips-8.18.6.tar.gz.json`）；
+- 待办（2026-09-02 全部完成）：① 所有者已采纳“归档作为 Release asset”方案，release.yml 已接线：
+  在“Build verified Runtime Bundle”**前**新增 “Prepare LGPL source-materials archive” 步骤
+  （审计要在运行时内看到完整归档），并把归档与其报告 JSON 加入 draft Release 上传列表
+  （`docs/RELEASE_TEMPLATE.md` 也加了引用）；② cairo 已于本机补取并核验（#4 完成）；③ #5 已落地：
+  `license-audit.mjs` 把 sharp 处置改为**机械判定**——仅当
+  `release-assets/lgpl-source-materials-*.tar.gz.json` 存在、`pendingSources` 为空且归档文件
+  SHA-256 与报告一致时记为 `documented-source-availability`，否则回到 `manual-review-required`；
+- 验证（2026-09-02，#5 落地后）：审计 `review=6, unresolved=0`；
+  `-RequireAuthenticode -RequireInstaller -RequireLicenseReview` 硬闸门仅剩未签名 FAIL，
+  `license-obligations-review` 已 PASS（报告 `phase4-results/release-gate-lgpl-review.json`）。
+  此前基线（#5 前）见下文“复核后验证”一段；
+- 复核后验证（2026-09-02）：`phase4-check.ps1 -RunProjectChecks` 通过（Rust 22 通过、3 忽略、
+  0 失败；license-metadata PASS；license-obligations-review 仍为 1 个 WARN），报告
+  `phase4-results/lgpl-review-final.json`；`-RequireAuthenticode -RequireInstaller
+  -RequireLicenseReview` 硬闸门按预期以退出码 1 拒绝（license-obligations-review FAIL 与
+  未签名 FAIL），报告 `phase4-results/release-gate-lgpl-review.json`；
+- `docs/LGPL_REVIEW.md` 已加入 `phase4-check.ps1` 发布文档清单。

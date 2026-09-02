@@ -34,7 +34,7 @@ if ($RunProjectChecks) {
     }
 }
 
-foreach ($relativePath in @('LICENSE', 'README.md', 'HANDOFF.md', 'docs\CODE_SIGNING_POLICY.md', 'docs\PRIVACY.md', 'docs\RELEASE_REVIEW.md', 'docs\RELEASE_TEMPLATE.md', 'docs\RUNTIME_LICENSES.md', 'docs\SIGNPATH_APPLICATION.md', 'docs\THIRD_PARTY_NOTICES.md')) {
+foreach ($relativePath in @('LICENSE', 'README.md', 'HANDOFF.md', 'docs\CODE_SIGNING_POLICY.md', 'docs\LGPL_REVIEW.md', 'docs\PRIVACY.md', 'docs\RELEASE_REVIEW.md', 'docs\RELEASE_TEMPLATE.md', 'docs\RUNTIME_LICENSES.md', 'docs\SIGNPATH_APPLICATION.md', 'docs\THIRD_PARTY_NOTICES.md')) {
     $path = Join-Path $ProjectRoot $relativePath
     if (Test-Path -LiteralPath $path -PathType Leaf) {
         Add-QualityResult -Check "document:$relativePath" -Status 'PASS' -Details 'Present.'

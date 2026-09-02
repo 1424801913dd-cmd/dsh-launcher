@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 const args = process.argv.slice(2);
@@ -96,6 +97,38 @@ function licenseCounts(packages) {
 
 const reviewPattern = /(?:^|[^A-Z])(?:A?GPL|LGPL|MPL|EPL|CDDL|SSPL|BUSL)(?:[^A-Z]|$)|COMMONS[ -]CLAUSE/i;
 
+function sha256Hex(path) {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+// The sharp/libvips LGPL manual review (docs/LGPL_REVIEW.md) is mechanically
+// satisfied only while a corresponding-source archive report exists under
+// release-assets with no pending sources, and the archive file itself still
+// matches the SHA-256 recorded in that report. Without that evidence the
+// package stays manual-review-required and the release gate keeps failing.
+function lgplSourceArchiveComplete(projectRoot) {
+  const assetsDir = join(projectRoot, "release-assets");
+  const reports = existsSync(assetsDir)
+    ? readdirSync(assetsDir).filter((name) => /^lgpl-source-materials-.*\.tar\.gz\.json$/.test(name))
+    : [];
+  for (const reportName of reports) {
+    try {
+      const report = readJson(join(assetsDir, reportName));
+      if ((report.pendingSources ?? []).length > 0) continue;
+      const archivePath = join(assetsDir, reportName.replace(/\.json$/, ""));
+      if (!existsSync(archivePath)) continue;
+      if (report.archiveSha256 &&
+          sha256Hex(archivePath).toUpperCase() !== String(report.archiveSha256).toUpperCase()) {
+        continue;
+      }
+      return true;
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
+
 function reviewRequired(ecosystem, packages) {
   return packages
     .filter((pkg) => reviewPattern.test(pkg.license))
@@ -105,7 +138,11 @@ function reviewRequired(ecosystem, packages) {
         : pkg.name === "@img/sharp-win32-x64"
           ? "https://github.com/lovell/sharp-libvips"
           : null;
-      const documented = pkg.license === "MPL-2.0" && sourceUrl !== null;
+      const documented =
+        (pkg.license === "MPL-2.0" && sourceUrl !== null) ||
+        (ecosystem === "runtime-npm" &&
+          pkg.name === "@img/sharp-win32-x64" &&
+          lgplSourceArchiveComplete(projectRoot));
       return {
         ecosystem,
         name: pkg.name,

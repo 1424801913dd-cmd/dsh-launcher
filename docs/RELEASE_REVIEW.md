@@ -1,6 +1,7 @@
 # DSH Launcher 发布身份与许可证复核
 
-更新时间：2026-09-01。本文是发布工程记录，不是法律意见；版本、Runtime 或品牌素材变化后必须重新复核。
+更新时间：2026-09-01（sharp/libvips 项于 2026-09-02 完成人工复核，见下文）。本文是发布工程记录，
+不是法律意见；版本、Runtime 或品牌素材变化后必须重新复核。
 
 ## 产品身份
 
@@ -43,14 +44,24 @@ Windows 预编译共享库来自 libvips 构建产物，并列出打包源码与
 LGPLv3 第 4 节要求显著许可说明、随附 GPL/LGPL 文本，并允许在满足条件时采用适合的共享库机制：
 <https://www.gnu.org/licenses/lgpl-3.0.html>。
 
-处置状态：`manual-review-required`。发布负责人仍需确认以下事项后才能解除硬门禁：
+处置状态：`documented-source-availability`（2026-09-02 生效）。完整复核记录见
+[docs/LGPL_REVIEW.md](LGPL_REVIEW.md)。该处置由机械证据支撑而非宣告：`scripts/license-audit.mjs`
+仅在 `release-assets/lgpl-source-materials-*.tar.gz.json` 报告存在、`pendingSources` 为空、且归档
+文件 SHA-256 与报告一致时，才把 `@img/sharp-win32-x64` 记为 `documented-source-availability`；
+任一条件不满足即回到 `manual-review-required`，license 门禁失败关闭。四项清单与当前状态：
 
-1. 安装介质和已安装产品随附 GPLv3、LGPLv3 全文以及上游第三方声明；
-2. 用户替换接口兼容 DLL 的能力不会被完整性校验、更新器或签名策略阻止；
-3. 对预编译 Windows 包中静态并入的 LGPL 组件，源码、构建脚本及必要的重链接材料满足发行要求；
-4. Release 页面给出对应版本源码/构建材料的长期可用地址或随包归档。
-
-在上述事项获得发行负责人或法律复核前，不将这一项自动标记为已解决。
+1. 安装介质和已安装产品随附 GPLv3、LGPLv3 全文以及上游第三方声明 —— 成立（以新机制重建的
+   Bundle 为准；当前活动 Runtime 早于该机制，其 `app/` 没有这些材料，下一个 Bundle 必须重新证明；
+   上游 npm 包内 `LICENSE` 仅 Apache-2.0 全文，由 Bundle 层补足 GPL/LGPL 文本）；
+2. 用户替换接口兼容 DLL 的能力不会被完整性校验、更新器或签名策略阻止 —— 成立（PE 导入表 +
+   单元测试 `installed_runtime_record_does_not_pin_replaceable_native_library_hashes`，见下方技术证据）；
+3. 对预编译 Windows 包中静态并入的 LGPL 组件，源码、构建脚本及必要的重链接材料满足发行要求 ——
+   成立（8 个 LGPL 组件源码 SHA-256 与 build-win64-mxe v8.18.6 配方逐一一致；cairo 按 MPL 2.0
+   已于 2026-09-02 下载并核验通过；三层构建链快照已归档）；
+4. Release 页面给出对应版本源码/构建材料的长期可用地址或随包归档 —— **已采纳随包归档**。
+   归档已生成：`release-assets/lgpl-source-materials-vips-8.18.6.tar.gz`（79,683,793 字节），
+   SHA-256 `5A6B85A33DA69292A08401C14279DDC3863EF678FE04FBA3E391F331B6981B1C`；release.yml
+   已把其生成与上传接线（见 `docs/LGPL_REVIEW.md`）。
 
 本机技术证据进一步确认：`sharp-win32-x64-0.35.4.node` 的 PE 导入表直接引用
 `libvips-42.dll` 和 `libvips-cpp-8.18.6.dll`，后者也直接引用 `libvips-42.dll`。启动器只在下载/安装时
@@ -60,7 +71,8 @@ LGPLv3 第 4 节要求显著许可说明、随附 GPL/LGPL 文本，并允许在
 
 但 `libvips-42.dll` 的导入表没有显示 glib、fribidi、libexif、libheif、librsvg 等 README 所列 LGPL
 组件的独立 DLL。结合上游对 Windows “static web releases” 的说明，可以合理推断其中至少部分组件静态
-并入该 DLL；这正是仍需源码、构建脚本和重链接材料人工复核的边界。可重复证据脚本为
+并入该 DLL；这正是源码、构建脚本和重链接材料人工复核的边界。2026-09-02 已完成复核并归档
+（[docs/LGPL_REVIEW.md](LGPL_REVIEW.md)）。可重复证据脚本为
 `scripts/runtime-license-evidence.ps1`，本次 JSON 位于已忽略的
 `phase4-results/runtime-license-evidence.json`。
 

@@ -15,6 +15,10 @@ param(
     [ValidateSet('PASS', 'FAIL', 'NOT_RUN')]
     [string]$FirstRunWizard = 'NOT_RUN',
     [ValidateSet('PASS', 'FAIL', 'NOT_RUN')]
+    [string]$VersionConsistency = 'NOT_RUN',
+    [ValidateSet('PASS', 'FAIL', 'NOT_RUN')]
+    [string]$UninstallEntry = 'NOT_RUN',
+    [ValidateSet('PASS', 'FAIL', 'NOT_RUN')]
     [string]$DefaultPaths = 'NOT_RUN',
     [ValidateSet('PASS', 'FAIL', 'NOT_RUN')]
     [string]$CustomUnicodePaths = 'NOT_RUN',
@@ -67,6 +71,8 @@ foreach ($registryPath in @(
 $observations = [ordered]@{
     install = $Install
     firstRunWizard = $FirstRunWizard
+    versionConsistency = $VersionConsistency
+    uninstallEntry = $UninstallEntry
     defaultPaths = $DefaultPaths
     customUnicodePaths = $CustomUnicodePaths
     offlineRetry = $OfflineRetry
@@ -81,7 +87,7 @@ $complete = @($statuses | Where-Object { $_ -ne 'PASS' }).Count -eq 0 -and
 $failed = @($statuses | Where-Object { $_ -eq 'FAIL' }).Count -gt 0
 $signature = Get-AuthenticodeSignature -LiteralPath $installer
 $report = [ordered]@{
-    schemaVersion = 2
+    schemaVersion = 3
     recordedAtUtc = [DateTime]::UtcNow.ToString('o')
     evidenceKind = 'manual Windows desktop acceptance'
     machine = [ordered]@{

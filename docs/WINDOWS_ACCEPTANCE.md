@@ -2,7 +2,9 @@
 
 第三步的目标是验证普通用户无需 Node.js、npm、Git、Rust 或终端操作即可完成安装和使用。GitHub 托管的 Windows runner 是 Windows Server，只能证明构建、安装器和 Runtime 自动化路径，不能替代 Windows 10/11 桌面验收。
 
-## 本轮收尾状态（2026-09-04）
+## 0.4.0 历史自动化收尾（2026-09-04，不代表当前桌面通过）
+
+后续 Windows 10 实体机已发现版本漂移，旧候选首次向导为 FAIL；其余未执行项继续保留 NOT_RUN。0.4.1 修复候选身份与复测状态见 `TRIAL_RELEASE_NOTES.md`、`VERSION_DRIFT_RETEST.md`，以下旧 CI 记录仅供追溯。
 
 项目所有者确认暂时没有一次性桌面虚拟机，本轮按“完成 CI、保留桌面验收待办”收尾，不将第三步完整桌面验收标记为通过。
 
@@ -55,12 +57,14 @@ runner 为 Windows Server 2025，作业耗时 12 分 39 秒。后续仅归档文
 分别准备 Windows 10 x64 和 Windows 11 x64 的干净桌面环境，记录实际补丁和 build。可以使用另一台实体电脑，也可以使用一次性虚拟机；不要求购买或安装虚拟机软件。
 开始前不得预装本项目、Node.js、DSH、Git 或 Rust，WebView2 可保留为系统组件。若测试电脑已有开发环境或生产数据，不要为验收删除它们：先记作兼容性试用，不能标记干净基线通过。
 虚拟机可保存干净快照；实体机应记录安装前状态，使用无重要 DSH 数据的测试账户和独立工作区。新建账户不等于清除了机器级预装软件。
-一台 Windows 11 电脑不能代替 Windows 10 验收。项目所有者现计划在另一台实体电脑补测，但尚未产生实测结果。每台机器执行以下检查：
+一台 Windows 11 电脑不能代替 Windows 10 验收。测试端 Windows 10 已回传 0.4.0 失败报告，0.4.1 需独立复测；Windows 11 仍待测试。每台机器执行以下检查：
 
 | 检查 | 通过标准 |
 | --- | --- |
 | 安装 | 当前用户安装完成，版本和安装资源正确 |
 | 首次向导 | 明确经历 1/3、2/3、3/3，普通用户无需命令行 |
+| 版本一致性 | 查询前/失败后禁止安装；按钮确认值、实际包、记录及活动版本一致 |
+| 卸载入口 | 安装后/首次启动后 Windows 应用列表可见，记录版本和路径正确 |
 | 默认路径 | 全部落在当前用户目录，不创建早期固定 D 盘目录 |
 | 自定义路径 | Runtime、缓存、DSH_HOME、工作区支持中文和空格，重启后生效 |
 | 断网重试 | 给出可操作提示；联网后重试成功，无损坏活动指针 |
@@ -71,7 +75,7 @@ runner 为 Windows Server 2025，作业耗时 12 分 39 秒。后续仅归档文
 | SmartScreen | 如实记录实际界面；未签名制品出现警告属于已知发布阻断项 |
 
 完成每台测试机后使用 `scripts/collect-windows-acceptance.ps1` 记录系统 build、WebView2、制品 SHA-256、Authenticode、SmartScreen 和所有观察项。
-schema v2 新增 `-EnvironmentKind physical|virtual|unknown` 和 `-BaselineClean YES|NO|UNKNOWN`；两者默认未知，不会自动宣称电脑干净。
+schema v3 保留 `-EnvironmentKind physical|virtual|unknown` 和 `-BaselineClean YES|NO|UNKNOWN`，新增 `-VersionConsistency PASS|FAIL|NOT_RUN` 与 `-UninstallEntry PASS|FAIL|NOT_RUN`。机器状态默认未知，观察项默认 NOT_RUN；不会自动宣称电脑干净或缺陷复测通过。
 脚本会拒绝 Windows Server、错误的 Windows 版本以及缺失的安装器；任何 `FAIL` 返回失败，任何 `NOT_RUN`、未知环境或非干净基线均返回未完成。
 
 ## 完成门槛

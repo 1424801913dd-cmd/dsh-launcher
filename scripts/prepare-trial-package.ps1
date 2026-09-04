@@ -81,6 +81,7 @@ $sources = [ordered]@{
     'READ-ME-FIRST.md' = Join-Path $projectRoot 'docs\TRIAL_GUIDE.md'
     'CODEX-HANDOFF.md' = Join-Path $projectRoot 'docs\TEST_MACHINE_HANDOFF.md'
     'TRIAL_RELEASE_NOTES.md' = Join-Path $projectRoot 'docs\TRIAL_RELEASE_NOTES.md'
+    'VERSION-DRIFT-RETEST.md' = Join-Path $projectRoot 'docs\VERSION_DRIFT_RETEST.md'
     'FEEDBACK.md' = Join-Path $projectRoot 'docs\TRIAL_FEEDBACK.md'
     'USER_GUIDE.md' = Join-Path $projectRoot 'docs\USER_GUIDE.md'
     'WINDOWS_ACCEPTANCE.md' = Join-Path $projectRoot 'docs\WINDOWS_ACCEPTANCE.md'

@@ -55,6 +55,27 @@ $fixtureReport.dataSentinelPreserved = $false
 Assert-Rejected { & $prepare -ArtifactRoot $fixture -OutputRoot $rejectedOutput } 'dataSentinelPreserved'
 Assert-Test (-not (Test-Path -LiteralPath $rejectedOutput)) 'Failing report creates no package'
 Copy-Item -LiteralPath (Join-Path $artifact '_temp\phase4-installer-smoke.json') -Destination $fixtureReportPath
+foreach ($field in @('uninstallRegistrationVerified', 'uninstallRegistrationRemoved')) {
+    $fixtureReport = Get-Content $fixtureReportPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $fixtureReport.$field = $false
+    [System.IO.File]::WriteAllText($fixtureReportPath, ($fixtureReport | ConvertTo-Json -Depth 6), [System.Text.UTF8Encoding]::new($false))
+    Assert-Rejected { & $prepare -ArtifactRoot $fixture -OutputRoot $rejectedOutput } $field
+    Copy-Item -LiteralPath (Join-Path $artifact '_temp\phase4-installer-smoke.json') -Destination $fixtureReportPath
+}
+$fixturePassivePath = Join-Path $fixture '_temp\phase4-installer-passive.json'
+$fixturePassive = Get-Content $fixturePassivePath -Raw -Encoding UTF8 | ConvertFrom-Json
+$fixturePassive.installerMode = 'Silent'
+[System.IO.File]::WriteAllText($fixturePassivePath, ($fixturePassive | ConvertTo-Json -Depth 6), [System.Text.UTF8Encoding]::new($false))
+Assert-Rejected { & $prepare -ArtifactRoot $fixture -OutputRoot $rejectedOutput } 'Both silent and passive'
+Copy-Item -LiteralPath (Join-Path $artifact '_temp\phase4-installer-passive.json') -Destination $fixturePassivePath
+$fixtureRuntimePath = Join-Path $fixture '_temp\clean-runtime-install.json'
+foreach ($field in @('packageVersion', 'runtimeVersion', 'activeVersion')) {
+    $fixtureRuntime = Get-Content $fixtureRuntimePath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $fixtureRuntime.versionConsistency.$field = '0.0.0-defect'
+    [System.IO.File]::WriteAllText($fixtureRuntimePath, ($fixtureRuntime | ConvertTo-Json -Depth 6), [System.Text.UTF8Encoding]::new($false))
+    Assert-Rejected { & $prepare -ArtifactRoot $fixture -OutputRoot $rejectedOutput } 'Runtime version consistency'
+    Copy-Item -LiteralPath (Join-Path $artifact '_temp\clean-runtime-install.json') -Destination $fixtureRuntimePath
+}
 [System.IO.File]::WriteAllText((Join-Path $fixture '_temp\dsh-installer-smoke\launcher-startup.json'), '{}')
 Assert-Rejected { & $prepare -ArtifactRoot $fixture -OutputRoot $rejectedOutput } 'Startup report'
 
@@ -73,6 +94,7 @@ $collectorArgs = @{
     ReportPath = Join-Path $testRoot 'synthetic-collector.json'
     EnvironmentKind = 'physical'; BaselineClean = 'YES'; SmartScreen = 'not-shown'
     Install = 'PASS'; FirstRunWizard = 'PASS'; DefaultPaths = 'PASS'; CustomUnicodePaths = 'PASS'
+    VersionConsistency = 'PASS'; UninstallEntry = 'PASS'
     OfflineRetry = 'PASS'; PortCollision = 'PASS'; StartOpenStop = 'PASS'; TrayBehavior = 'PASS'
     UninstallDataRetention = 'PASS'; Notes = 'SYNTHETIC TEST ONLY - NOT DESKTOP ACCEPTANCE EVIDENCE'
 }
@@ -94,6 +116,13 @@ $collectorArgs.EnvironmentKind = 'unknown'
 $record = Get-Content $collectorArgs.ReportPath -Raw -Encoding UTF8 | ConvertFrom-Json
 Assert-Test (-not $record.complete) 'Collector requires environment kind'
 $collectorArgs.EnvironmentKind = 'physical'
+foreach ($observation in @('VersionConsistency', 'UninstallEntry')) {
+    $collectorArgs[$observation] = 'NOT_RUN'
+    & $collector @collectorArgs
+    $record = Get-Content $collectorArgs.ReportPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    Assert-Test (-not $record.complete -and $record.schemaVersion -eq 3) "Collector requires defect regression observation: $observation"
+    $collectorArgs[$observation] = 'PASS'
+}
 $collectorArgs.Install = 'NOT_RUN'
 & $collector @collectorArgs
 $record = Get-Content $collectorArgs.ReportPath -Raw -Encoding UTF8 | ConvertFrom-Json

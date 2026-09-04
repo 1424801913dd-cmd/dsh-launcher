@@ -1,6 +1,14 @@
 name: Read-only installer diagnostic
 on:
   workflow_dispatch:
+  push:
+    branches: [codex/product-step3-acceptance]
+    paths:
+      - .github/workflows/installer-diagnostic.yml
+      - src-tauri/installer-diagnostics/**
+      - src-tauri/tauri.diagnostic.conf.json
+      - scripts/check-installer-diagnostic.mjs
+      - scripts/test-installer-diagnostic.ps1
 permissions:
   contents: read
 jobs:

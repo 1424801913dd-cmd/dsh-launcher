@@ -39,6 +39,7 @@ Runtime Bundle 更新期间执行 `npm install` 或网络生命周期脚本。
 普通用户的首次安装、目录说明和故障排查见 [docs/USER_GUIDE.md](docs/USER_GUIDE.md)。
 干净 Windows 自动化与桌面验收矩阵见 [docs/WINDOWS_ACCEPTANCE.md](docs/WINDOWS_ACCEPTANCE.md)。
 2026-09-04：一次性 Windows CI 的从零 Runtime 安装及安装器启停/卸载验收已通过；Windows 10/11 桌面验收仍待执行，当前制品仍未签名。
+后续 Windows 10 实体机发现 0.4.0 版本漂移，旧候选停止使用；当前 0.4.1 修复和复测范围见 [版本漂移复测说明](docs/VERSION_DRIFT_RETEST.md)。旧 CI 通过不等于该桌面缺陷已关闭。
 
 ## 受控试用准备
 
@@ -50,13 +51,13 @@ Runtime Bundle 更新期间执行 `npm install` 或网络生命周期脚本。
 
 ```powershell
 ./scripts/prepare-trial-package.ps1 `
-  -ArtifactRoot ./phase4-results/ci-33835360786 `
-  -OutputRoot ./release-assets/trial-step4-handoff-v2
+  -ArtifactRoot ./phase4-results/ci-33857469193 `
+  -OutputRoot ./release-assets/trial-step4-0.4.1
 ```
 
-脚本按 `scripts/data/trial-candidate.json` 固定安装器身份，并核对三份 CI 报告；拒绝哈希不符、失败报告和覆盖已有输出。
+脚本按 `scripts/data/trial-candidate.json` 固定安装器身份，并核对四份 CI 报告（含两种安装模式和精确版本一致性）；拒绝哈希不符、失败报告和覆盖已有输出。
 包内包含安装器、校验值、说明、反馈表及可选的桌面记录脚本，不包含个人数据或预装 Runtime。
-回归验证入口为 `scripts/test-trial-package.ps1 -ArtifactRoot ./phase4-results/ci-33835360786`；其模拟报告不是实机验收证据。
+回归验证入口为 `scripts/test-trial-package.ps1 -ArtifactRoot ./phase4-results/ci-33857469193`；其模拟报告不是实机验收证据。
 
 ## 安全边界
 

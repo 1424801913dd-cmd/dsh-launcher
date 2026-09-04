@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
-  "version": "0.4.0",
-  "candidateId": "0.4.0-trial-ci33835360786",
-  "sourceCommit": "f6b6a0b4148f23ba8d6f325cb262748aaa627e1b",
-  "ciRunUrl": "https://github.com/1424801913dd-cmd/dsh-launcher/actions/runs/33835360786",
+  "version": "0.4.1",
+  "candidateId": "0.4.1-trial-ci33857469193",
+  "sourceCommit": "9782067f3f358a7c5458eddb8464afb66acead4f",
+  "ciRunUrl": "https://github.com/1424801913dd-cmd/dsh-launcher/actions/runs/33857469193",
   "artifactName": "phase4-unsigned-installer-smoke",
-  "installerName": "DSH Launcher_0.4.0_x64-setup.exe",
-  "installerBytes": 2167548,
-  "installerSha256": "949744407DABBCA21CD0AA3D7CE4F8FC93FDC2C935FCCD03E6081DF1ADA6E0DF",
-  "installedExecutableSha256": "6ED51495F5D020AD564E618CC498E375EA6DD6AD9CC223D7BD13DE8ACB0D2981",
+  "installerName": "DSH Launcher_0.4.1_x64-setup.exe",
+  "installerBytes": 2169407,
+  "installerSha256": "B92DE28E8018D7D744F6F44BFDABE0E5C2C98B926D47D4D3EEA3812A24F1FAEF",
+  "installedExecutableSha256": "E878F4E728D0D6A476B6B553C52D51A4BD603C824C693228966A71696F51DF23",
   "distribution": "controlled-unsigned-trial",
   "remoteUpdatesEnabled": false
 }

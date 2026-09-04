@@ -4,8 +4,8 @@
 
 ## 这是什么包
 
-- 候选编号：`0.4.0-trial-ci33835360786`，应用显示版本仍为 `0.4.0`。
-- 安装器来自已通过自动化检查的 [CI 运行](https://github.com/1424801913dd-cmd/dsh-launcher/actions/runs/33835360786)，不是重新编译的另一份文件。
+- 候选编号：`0.4.1-trial-ci33857469193`，应用显示版本为 `0.4.1`。
+- 安装器来自已通过自动化检查的 [CI 运行](https://github.com/1424801913dd-cmd/dsh-launcher/actions/runs/33857469193)，不是重新编译的另一份文件。
 - 安装器没有 Authenticode 签名；远程启动器更新与签名 Runtime 更新均未启用。首次安装仍会联网下载 Node/DSH 并运行 npm 安装脚本。
 - Windows 10/11 桌面验收尚未完成；CI 在 Windows Server 上通过不等于日常桌面体验已验收。
 - 不含预装 Runtime、个人设置、API Key、会话、日志或开发环境；无需自行安装 Node、npm、Git、Rust。
@@ -35,14 +35,14 @@
 
 ## 核对身份再安装
 
-安装器文件名：`DSH Launcher_0.4.0_x64-setup.exe`。
+安装器文件名：`DSH Launcher_0.4.1_x64-setup.exe`。
 
-SHA-256：`949744407DABBCA21CD0AA3D7CE4F8FC93FDC2C935FCCD03E6081DF1ADA6E0DF`。
+SHA-256：`B92DE28E8018D7D744F6F44BFDABE0E5C2C98B926D47D4D3EEA3812A24F1FAEF`。
 
 可在解压目录打开 PowerShell，执行只读检查（不是产品运行前提）：
 
 ```powershell
-Get-FileHash -LiteralPath '.\DSH Launcher_0.4.0_x64-setup.exe' -Algorithm SHA256
+Get-FileHash -LiteralPath '.\DSH Launcher_0.4.1_x64-setup.exe' -Algorithm SHA256
 ```
 
 与项目所有者另行提供的摘要或 CI 来源核对；ZIP 内自带的摘要不能单独证明来源可信。摘要不一致时停止，不要运行。
@@ -92,7 +92,7 @@ Runtime 有已验证上一版本时，可以使用应用内回滚；没有上一
 ```powershell
 .\collect-windows-acceptance.ps1 `
   -ExpectedWindows Windows11 -EnvironmentKind physical -BaselineClean YES `
-  -InstallerPath '.\DSH Launcher_0.4.0_x64-setup.exe' `
+  -InstallerPath '.\DSH Launcher_0.4.1_x64-setup.exe' `
   -ReportPath '.\windows11-acceptance.json'
 ```
 

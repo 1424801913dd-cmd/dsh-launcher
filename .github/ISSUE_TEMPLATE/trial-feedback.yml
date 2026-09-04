@@ -9,7 +9,7 @@ body:
     id: candidate
     attributes:
       label: 候选编号与安装器 SHA-256
-      placeholder: "0.4.0-trial-ci33835360786；哈希是否核对一致"
+      placeholder: "0.4.1-trial-ci33857469193；哈希是否核对一致"
     validations:
       required: true
   - type: textarea

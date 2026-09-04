@@ -13,12 +13,12 @@
 
 ## 制品身份
 
-- 候选编号：`0.4.0-trial-ci33835360786`；应用版本 `0.4.0`。
-- 源码提交：`f6b6a0b4148f23ba8d6f325cb262748aaa627e1b`。
-- [通过的 CI](https://github.com/1424801913dd-cmd/dsh-launcher/actions/runs/33835360786)：Windows Server 2025，包含从零 Runtime、已安装启动器初始化与卸载测试。
-- 安装器：`DSH Launcher_0.4.0_x64-setup.exe`，2,167,548 字节。
-- 安装器 SHA-256：`949744407DABBCA21CD0AA3D7CE4F8FC93FDC2C935FCCD03E6081DF1ADA6E0DF`。
-- 本轮只更新包内文档，安装器未重编译。没有 Authenticode 签名，不得宣称有 SignPath Foundation 或 DeepSeek 背书。
+- 候选编号：`0.4.1-trial-ci33857469193`；应用版本 `0.4.1`。
+- 源码提交：`9782067f3f358a7c5458eddb8464afb66acead4f`。
+- [通过的 CI](https://github.com/1424801913dd-cmd/dsh-launcher/actions/runs/33857469193)：Windows Server 2025，包含从零 Runtime、已安装启动器初始化与卸载测试。
+- 安装器：`DSH Launcher_0.4.1_x64-setup.exe`，2,169,407 字节。
+- 安装器 SHA-256：`B92DE28E8018D7D744F6F44BFDABE0E5C2C98B926D47D4D3EEA3812A24F1FAEF`。
+- 本轮重新构建 0.4.1，包含版本锁定修复与更新后的内置使用说明。没有 Authenticode 签名，不得宣称有 SignPath Foundation 或 DeepSeek 背书。
 - 普通候选版远程更新关闭，首次安装仍需联网下载 Node/DSH 并运行 npm 安装脚本。不要套用签名 Runtime Bundle 的离线/免 npm 文案。
 - 包内不含完整源码，不需要为了产品试用在测试机安装 Rust、Git、Node 等开发工具。
 

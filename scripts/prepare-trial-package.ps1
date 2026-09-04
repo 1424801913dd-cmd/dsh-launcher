@@ -8,8 +8,17 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $candidatePath = Join-Path $PSScriptRoot 'data\trial-candidate.json'
 $candidate = Get-Content -LiteralPath $candidatePath -Raw -Encoding UTF8 | ConvertFrom-Json
 if ($candidate.schemaVersion -ne 1 -or $candidate.distribution -ne 'controlled-unsigned-trial' -or
-    $candidate.remoteUpdatesEnabled -ne $false -or $candidate.candidateId -notmatch '^[A-Za-z0-9._-]+$') {
+    $candidate.remoteUpdatesEnabled -ne $false -or $candidate.candidateId -notmatch '^[A-Za-z0-9._-]+$' -or
+    $candidate.sourceCommit -notmatch '^[a-f0-9]{40}$' -or $candidate.installerSha256 -notmatch '^[A-F0-9]{64}$') {
     throw 'Invalid controlled-trial candidate metadata.'
+}
+$projectVersion = (Get-Content -LiteralPath (Join-Path $projectRoot 'package.json') -Raw -Encoding UTF8 | ConvertFrom-Json).version
+if ($candidate.version -ne $projectVersion) { throw 'Candidate metadata is not for the current application version.' }
+foreach ($document in @('docs\TRIAL_GUIDE.md', 'docs\TEST_MACHINE_HANDOFF.md')) {
+    $body = Get-Content -LiteralPath (Join-Path $projectRoot $document) -Raw -Encoding UTF8
+    foreach ($identity in @($candidate.candidateId, $candidate.installerName, $candidate.installerSha256)) {
+        if (-not $body.Contains($identity)) { throw "Handoff document identity is stale: $document" }
+    }
 }
 $artifact = (Resolve-Path -LiteralPath $ArtifactRoot).Path
 $output = [System.IO.Path]::GetFullPath($OutputRoot)
@@ -51,23 +60,23 @@ if ($null -eq $versions -or $versions.passed -ne $true -or
 if ($installReport.installerMode -ne 'Silent' -or $passiveReport.installerMode -ne 'Passive') {
     throw 'Both silent and passive installer evidence is required.'
 }
-foreach ($installReport in @($installReport, $passiveReport)) {
-if ($installReport.schemaVersion -ne 1 -or $installReport.installerSha256 -ne $installerHash -or
-    $installReport.expectedVersion -ne $candidate.version -or $installReport.installedVersion -ne $candidate.version -or
-    $installReport.silentInstallExitCode -ne 0 -or $installReport.silentUninstallExitCode -ne 0) {
-    throw 'Installer report does not match the candidate or has a failing exit code.'
-}
-foreach ($field in @('installedFilesVerified', 'installedExecutableRemoved', 'dataSentinelPreserved',
-    'shortcutRemoved', 'launchSmokeRequested', 'launchSmokePassed',
-    'uninstallRegistrationVerified', 'uninstallRegistrationRemoved')) {
-    if ($installReport.$field -ne $true) { throw "Installer report missing passing check: $field" }
-}
 . (Join-Path $PSScriptRoot 'launcher-uninstall-registry.ps1')
-foreach ($entries in @('uninstallRegistrationBeforeLaunch', 'uninstallRegistrationAfterLaunch')) {
-    $registration = @($installReport.$entries)
-    $location = ([string]($registration | Select-Object -First 1).InstallLocation).Trim('"')
-    Assert-LauncherUninstallRegistration -Entries $registration -InstallRoot $location -ExpectedVersion $candidate.version
-}
+foreach ($modeReport in @($installReport, $passiveReport)) {
+    if ($modeReport.schemaVersion -ne 1 -or $modeReport.installerSha256 -ne $installerHash -or
+        $modeReport.expectedVersion -ne $candidate.version -or $modeReport.installedVersion -ne $candidate.version -or
+        $modeReport.silentInstallExitCode -ne 0 -or $modeReport.silentUninstallExitCode -ne 0) {
+        throw 'Installer report does not match the candidate or has a failing exit code.'
+    }
+    foreach ($field in @('installedFilesVerified', 'installedExecutableRemoved', 'dataSentinelPreserved',
+        'shortcutRemoved', 'launchSmokeRequested', 'launchSmokePassed',
+        'uninstallRegistrationVerified', 'uninstallRegistrationRemoved')) {
+        if ($modeReport.$field -ne $true) { throw "Installer report missing passing check: $field" }
+    }
+    foreach ($entries in @('uninstallRegistrationBeforeLaunch', 'uninstallRegistrationAfterLaunch')) {
+        $registration = @($modeReport.$entries)
+        $location = ([string]($registration | Select-Object -First 1).InstallLocation).Trim('"')
+        Assert-LauncherUninstallRegistration -Entries $registration -InstallRoot $location -ExpectedVersion $candidate.version
+    }
 }
 if ($startupReport.schemaVersion -ne 1 -or $startupReport.passed -ne $true -or
     $startupReport.initialized -ne $true -or $null -ne $startupReport.failure -or

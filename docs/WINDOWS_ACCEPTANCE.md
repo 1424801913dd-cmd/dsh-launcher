@@ -2,6 +2,13 @@
 
 第三步的目标是验证普通用户无需 Node.js、npm、Git、Rust 或终端操作即可完成安装和使用。GitHub 托管的 Windows runner 是 Windows Server，只能证明构建、安装器和 Runtime 自动化路径，不能替代 Windows 10/11 桌面验收。
 
+## 当前修复候选 0.4.1（2026-09-04）
+
+- [CI 33857469193](https://github.com/1424801913dd-cmd/dsh-launcher/actions/runs/33857469193) 全部通过，源码 `9782067f3f358a7c5458eddb8464afb66acead4f`，Windows Server 2025，17 分 37 秒。
+- 前端 4 项、Rust 34 项、卸载注册规则 8 项通过；真实从零安装报告耗时 94.032 秒，推荐版 expected/package/runtime/active 均为 `0.1.2-rc.1`，无残留受管进程。
+- 静默和 Passive 安装后、首次启动后的当前用户卸载注册项正确；卸载后注册项和程序移除、数据标记保留。安装器为 0.4.1，未签名；身份见 `scripts/data/trial-candidate.json`（ZIP 中为 `candidate.json`）。
+- Windows 10：0.4.0 旧候选有已报告 FAIL；0.4.1 尚待复测。Windows 11：尚未测试。两者不能以本次 CI 代替，复测流程见 `TEST_MACHINE_HANDOFF.md`（ZIP 中为 `CODEX-HANDOFF.md`）。
+
 ## 0.4.0 历史自动化收尾（2026-09-04，不代表当前桌面通过）
 
 后续 Windows 10 实体机已发现版本漂移，旧候选首次向导为 FAIL；其余未执行项继续保留 NOT_RUN。0.4.1 修复候选身份与复测状态见 `TRIAL_RELEASE_NOTES.md`、`VERSION_DRIFT_RETEST.md`，以下旧 CI 记录仅供追溯。

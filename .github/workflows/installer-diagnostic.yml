@@ -1,0 +1,42 @@
+name: Read-only installer diagnostic
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diagnostic:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Check non-mutating template
+        run: node scripts/check-installer-diagnostic.mjs
+      - name: Build diagnostic-only probe
+        shell: pwsh
+        run: |
+          npm run tauri -- build --config src-tauri/tauri.diagnostic.conf.json --bundles nsis --no-sign --ci
+          if ($LASTEXITCODE -ne 0) { throw 'Diagnostic build failed.' }
+      - name: Exercise actual NSIS dialogs and safety boundaries
+        shell: pwsh
+        run: |
+          $installer = @(Get-ChildItem ./src-tauri/target/release/bundle/nsis/*.exe -File)
+          if ($installer.Count -ne 1) { throw 'Expected one diagnostic EXE.' }
+          ./scripts/test-installer-diagnostic.ps1 -InstallerPath $installer[0].FullName `
+            -TestRoot (Join-Path $env:RUNNER_TEMP 'installer-diagnostic-cases') `
+            -ReportPath (Join-Path $env:RUNNER_TEMP 'installer-diagnostic-report.json')
+      - name: Upload clearly separated diagnostic artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-diagnostic-READ-ONLY
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            ${{ runner.temp }}/installer-diagnostic-report.json
+            ${{ runner.temp }}/installer-diagnostic-cases/*/installer-diagnostic-*.log

@@ -1,0 +1,15 @@
+{
+  "bundle": {
+    "active": true,
+    "licenseFile": "installer-diagnostics/LICENSE_MIT",
+    "createUpdaterArtifacts": false,
+    "targets": ["nsis"],
+    "windows": {
+      "nsis": {
+        "template": "installer-diagnostics/installer.nsi",
+        "displayLanguageSelector": false,
+        "installMode": "currentUser"
+      }
+    }
+  }
+}

@@ -59,4 +59,5 @@ Alpha 是主动选择的预览通道，可能不稳定，不会静默安装。�
 
 ## 当前发布限制
 
-SignPath Foundation 申请目前未获批准，公开制品不能声称已获得 Foundation 证书或其背书。没有有效 Authenticode 签名时，Windows 可能显示未知发布者或 SmartScreen 提示；请仅从项目正式发布页获取制品并核对发布说明中的摘要。
+SignPath Foundation 申请目前未获批准，公开制品不能声称已获得 Foundation 证书或其背书。没有有效 Authenticode 签名时，Windows 可能显示未知发布者或 SmartScreen 提示。
+正式发行制品只从项目发布页获取；受邀试用者可使用维护者明确提供、对应已核验 CI 记录的候选包，并核对另行确认的 SHA-256。两者不能混称。受控试用流程见 `TRIAL_GUIDE.md`（试用 ZIP 中为 `READ-ME-FIRST.md`）；系统阻止或来源不明时停止，不要求关闭安全防护。

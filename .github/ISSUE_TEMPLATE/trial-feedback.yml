@@ -1,0 +1,51 @@
+name: 试用反馈
+description: 报告 DSH Launcher 受控试用中的问题或验收结果
+title: "[试用] "
+body:
+  - type: markdown
+    attributes:
+      value: "请勿上传 API Key、Token、Cookie、完整会话或私人文件。未测试请写 NOT_RUN，CI 通过不能替代桌面观察。"
+  - type: input
+    id: candidate
+    attributes:
+      label: 候选编号与安装器 SHA-256
+      placeholder: "0.4.0-trial-ci33835360786；哈希是否核对一致"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 测试环境
+      description: Windows 版本/build、x64、实体机或虚拟机、测试前是否已有 DSH/Node/开发工具、自定义路径与网络情况；不填写个人账户信息。
+    validations:
+      required: true
+  - type: dropdown
+    id: smartscreen
+    attributes:
+      label: SmartScreen 实际观察
+      options:
+        - 未观察
+        - 未显示
+        - 显示警告
+        - 阻止运行
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 操作步骤、预期结果与实际结果
+      description: 无故障时可粘贴填写后的验收表；未执行项保留 NOT_RUN。
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 脱敏诊断与截图
+      description: 可选；优先使用启动器的诊断摘要，发送前人工检查。
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: 隐私确认
+      options:
+        - label: 我已检查内容，不包含凭据、完整会话或敏感个人信息。
+          required: true

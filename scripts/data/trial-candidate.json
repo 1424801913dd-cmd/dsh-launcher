@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "version": "0.4.0",
+  "candidateId": "0.4.0-trial-ci33835360786",
+  "sourceCommit": "f6b6a0b4148f23ba8d6f325cb262748aaa627e1b",
+  "ciRunUrl": "https://github.com/1424801913dd-cmd/dsh-launcher/actions/runs/33835360786",
+  "artifactName": "phase4-unsigned-installer-smoke",
+  "installerName": "DSH Launcher_0.4.0_x64-setup.exe",
+  "installerBytes": 2167548,
+  "installerSha256": "949744407DABBCA21CD0AA3D7CE4F8FC93FDC2C935FCCD03E6081DF1ADA6E0DF",
+  "installedExecutableSha256": "6ED51495F5D020AD564E618CC498E375EA6DD6AD9CC223D7BD13DE8ACB0D2981",
+  "distribution": "controlled-unsigned-trial",
+  "remoteUpdatesEnabled": false
+}

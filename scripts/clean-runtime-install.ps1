@@ -57,11 +57,14 @@ $oldRuntimeRoot = $env:DSH_LAUNCHER_RUNTIME_ROOT
 $oldCacheRoot = $env:DSH_LAUNCHER_CACHE_ROOT
 $oldInstallRoot = $env:DSH_LAUNCHER_TEST_INSTALL_ROOT
 $oldWorkspace = $env:DSH_LAUNCHER_TEST_WORKSPACE
+$oldVersionReport = $env:DSH_LAUNCHER_TEST_VERSION_REPORT
+$versionReportPath = Join-Path $testRootPath 'version-consistency.json'
 
 try {
     $env:DSH_LAUNCHER_RUNTIME_ROOT = Join-Path $testRootPath 'manager'
     $env:DSH_LAUNCHER_CACHE_ROOT = Join-Path $testRootPath 'cache'
     $env:DSH_LAUNCHER_TEST_INSTALL_ROOT = Join-Path $testRootPath 'manager'
+    $env:DSH_LAUNCHER_TEST_VERSION_REPORT = $versionReportPath
     # ASCII source also preserves actual Chinese characters under Windows PowerShell 5.1.
     $unicodeWorkspace = "workspace $([char]0x4E2D)$([char]0x6587) $([char]0x7A7A)$([char]0x683C)"
     $env:DSH_LAUNCHER_TEST_WORKSPACE = Join-Path $testRootPath $unicodeWorkspace
@@ -75,6 +78,7 @@ try {
     $env:DSH_LAUNCHER_CACHE_ROOT = $oldCacheRoot
     $env:DSH_LAUNCHER_TEST_INSTALL_ROOT = $oldInstallRoot
     $env:DSH_LAUNCHER_TEST_WORKSPACE = $oldWorkspace
+    $env:DSH_LAUNCHER_TEST_VERSION_REPORT = $oldVersionReport
 }
 
 $productionHashAfter = if (Test-Path -LiteralPath $productionPointer -PathType Leaf) {
@@ -85,7 +89,15 @@ $productionHashAfter = if (Test-Path -LiteralPath $productionPointer -PathType L
 $managedProcesses = @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction Stop | Where-Object {
     $_.CommandLine -like '*dsh-bridge.mjs*' -and $_.CommandLine -like "*$testRootPath*"
 })
-$passed = $testExitCode -eq 0 -and $managedProcesses.Count -eq 0 -and
+$versionEvidence = if (Test-Path -LiteralPath $versionReportPath -PathType Leaf) {
+    Get-Content -LiteralPath $versionReportPath -Raw -Encoding UTF8 | ConvertFrom-Json
+} else { $null }
+$versionVerified = $null -ne $versionEvidence -and $versionEvidence.passed -eq $true -and
+    -not [string]::IsNullOrWhiteSpace($versionEvidence.expectedVersion) -and
+    $versionEvidence.packageVersion -eq $versionEvidence.expectedVersion -and
+    $versionEvidence.runtimeVersion -eq $versionEvidence.expectedVersion -and
+    $versionEvidence.activeVersion -eq $versionEvidence.expectedVersion
+$passed = $testExitCode -eq 0 -and $versionVerified -and $managedProcesses.Count -eq 0 -and
     $productionHashBefore -eq $productionHashAfter
 $finishedAt = [DateTime]::UtcNow
 $report = [ordered]@{
@@ -96,6 +108,7 @@ $report = [ordered]@{
     durationSeconds = [math]::Round(($finishedAt - $startedAt).TotalSeconds, 3)
     testRoot = $testRootPath
     testExitCode = $testExitCode
+    versionConsistency = $versionEvidence
     unicodeAndSpaceWorkspace = $true
     remainingManagedDshProcesses = $managedProcesses.Count
     productionPointer = $productionPointer

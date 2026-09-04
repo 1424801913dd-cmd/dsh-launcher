@@ -1,8 +1,11 @@
 $ErrorActionPreference = 'Stop'
+& (Join-Path $PSScriptRoot 'test-installer-registration.ps1')
 . (Join-Path $PSScriptRoot 'Initialize-DevEnvironment.ps1')
 
 npm.cmd run check
 if ($LASTEXITCODE -ne 0) { throw "npm check failed with exit code $LASTEXITCODE." }
+npm.cmd test
+if ($LASTEXITCODE -ne 0) { throw "frontend selection tests failed with exit code $LASTEXITCODE." }
 npm.cmd run build
 if ($LASTEXITCODE -ne 0) { throw "frontend build failed with exit code $LASTEXITCODE." }
 cargo fmt --manifest-path 'src-tauri\Cargo.toml' --check

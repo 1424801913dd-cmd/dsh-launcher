@@ -40,6 +40,24 @@ Runtime Bundle 更新期间执行 `npm install` 或网络生命周期脚本。
 干净 Windows 自动化与桌面验收矩阵见 [docs/WINDOWS_ACCEPTANCE.md](docs/WINDOWS_ACCEPTANCE.md)。
 2026-09-04：一次性 Windows CI 的从零 Runtime 安装及安装器启停/卸载验收已通过；Windows 10/11 桌面验收仍待执行，当前制品仍未签名。
 
+## 受控试用准备
+
+另一台实体电脑也可用于桌面验收，不要求安装虚拟机。先读 [试用指南](docs/TRIAL_GUIDE.md)，候选版本与限制见
+[试用说明](docs/TRIAL_RELEASE_NOTES.md)，结果填写 [反馈表](docs/TRIAL_FEEDBACK.md)。不要在已有重要 DSH 数据的账户上直接试装。
+第二台电脑已试过旧版安装：接手助手先读 [旧安装盘点与安全隔离说明](docs/TEST_MACHINE_HANDOFF.md)（ZIP 中为 `CODEX-HANDOFF.md`），不要直接清理目录或把兼容性测试当作全新安装。
+
+维护者可从已核验 CI artifact 生成可拷贝试用 ZIP，不重新构建 EXE、不发布 Release：
+
+```powershell
+./scripts/prepare-trial-package.ps1 `
+  -ArtifactRoot ./phase4-results/ci-33835360786 `
+  -OutputRoot ./release-assets/trial-step4-handoff-v2
+```
+
+脚本按 `scripts/data/trial-candidate.json` 固定安装器身份，并核对三份 CI 报告；拒绝哈希不符、失败报告和覆盖已有输出。
+包内包含安装器、校验值、说明、反馈表及可选的桌面记录脚本，不包含个人数据或预装 Runtime。
+回归验证入口为 `scripts/test-trial-package.ps1 -ArtifactRoot ./phase4-results/ci-33835360786`；其模拟报告不是实机验收证据。
+
 ## 安全边界
 
 - 不读取、复制、记录或上传 DSH 凭据与完整会话内容；

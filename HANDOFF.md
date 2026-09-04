@@ -1337,3 +1337,54 @@ Authenticode、干净虚拟机和发布验收完成前，不得把本地 `0.4.0`
   完整摘要及制品身份见 `docs/WINDOWS_ACCEPTANCE.md` 的“本轮收尾状态”。CI 制品与本机构建不是同一个文件，勿混用哈希。
 - 项目所有者明确选择“暂时没有，先完成 CI 并保留桌面验收待办”。因此本轮 CI/归档工作已收尾；
   Windows 10/11 桌面均保留 `NOT_RUN`，未来按验收矩阵补测。代码签名和 SmartScreen 风险仍是正式发布阻断项。
+
+## 二十六、产品化第四步：发布与受控试用准备（2026-09-04）
+
+项目所有者改用另一台实体电脑做桌面验收，不再准备虚拟机。本轮实现可带走的候选包与试用流程，不直接正式发布，
+不放宽签名门禁，也不将未执行的桌面验收标记为通过。
+
+### 1. 固定候选包与防错打包
+
+- `scripts/data/trial-candidate.json` 固定 `0.4.0-trial-ci33835360786` 的 CI、受测提交、安装器字节数和内外 EXE 哈希；
+  应用版本仍为 `0.4.0`，没有重新编译另一份安装器冒充受测制品。
+- `scripts/prepare-trial-package.ps1` 核对安装器身份、未签名状态、从零 Runtime/安装器/启动三份报告，按白名单打包，
+  不包含本机用户目录、设置、日志、密钥或 Runtime。拒绝失败报告、改动后的 EXE 及覆盖已有输出。
+- ZIP 包含安装器、`READ-ME-FIRST.md`、试用说明、反馈表、用户/隐私/签名说明、许可通知、可选验收脚本、
+  三份 CI 报告和 `SHA256SUMS.txt`；生成侧另有 `package-report.json` 记录 ZIP 哈希。输出位于被 Git 忽略的 `release-assets/`。
+
+### 2. 实体机验收与反馈
+
+- `docs/TRIAL_GUIDE.md` 给出拷贝/校验、默认路径第一轮、异常/卸载第二轮、故障保留现场和回退边界。
+  不要求关闭 Defender 或绕过系统策略；来源不明、哈希不符或系统阻止时停止反馈。
+- `collect-windows-acceptance.ps1` schema v2 区分实体机/虚拟机并要求确认安装前干净基线；未知或不干净状态不能得到完整验收通过。
+  新账户不等于机器干净，一台电脑不能代表两个 Windows 版本；不为验收删除已有开发工具或生产数据。
+- `docs/TRIAL_FEEDBACK.md` 可离线填写回传；`.github/ISSUE_TEMPLATE/trial-feedback.yml` 已准备，只有进入默认分支后才显示为 GitHub 模板。
+- `docs/TRIAL_RELEASE_NOTES.md` 区分受控未签名试用和签名正式发行；首次联网安装仍会运行 npm 安装脚本，不能套用正式 Runtime Bundle 的免 npm 文案。
+
+### 3. 验证与仍待执行
+
+- `scripts/test-trial-package.ps1` 覆盖真实 artifact 打包/解压逐文件校验、篡改安装器、失败/缺失字段报告、重复输出、
+  实体机/虚拟机分类、未知/不干净基线、未执行/失败观察及 Windows Server/错误 Windows 代际拒绝。
+  记录器测试使用模拟系统数据，报告明确标记 `SYNTHETIC TEST ONLY`，不可作为桌面验收提交。
+- `phase4-check.ps1` 已纳入新增试用文档与脚本语法检查；正式签名、实体机实测和公开发布仍未执行。
+- 本轮 33 项试用回归检查通过，报告位于
+  `phase4-results/trial-tests-feff9820cbca4ecbaa8134c5ba9e33de/regression-report.json`；
+  发布质量基线通过非签名检查，报告 `phase4-results/product-step4-quality.json`，仅保留预期未签名/无证书 WARN。
+- 已生成 `release-assets/trial-step4/DSH-Launcher-0.4.0-trial-ci33835360786.zip`，含 16 个文件，2,177,465 字节，
+  SHA-256 `06DFA34DF7AC98EB8693809EE363117AEB8901735348692F67ECA51C393D22F0`；
+  哈希与本轮打包/解压校验测试的 ZIP 一致。包内未执行安装器，未对第二台电脑产生任何操作。
+- 本轮没有更改 Rust/前端业务代码、合并主分支、创建 GitHub Release、发送 Issue 或修改生产安装；
+  下一步由项目所有者在第二台电脑使用候选包，回传反馈表及必要的脱敏诊断。
+
+### 4. 第二台电脑已有旧安装：接手补充
+
+- 用户补充确认：第二台电脑在本轮五步任务前已经安装并成功运行，默认视为已有旧状态，不直接进入全新安装流程。
+- 新增 `docs/TEST_MACHINE_HANDOFF.md`，在 ZIP 内命名为 `CODEX-HANDOFF.md`；入口 `READ-ME-FIRST.md` 已加入醒目提醒。
+  文档说明只读盘点、可能含凭据/会话的用户数据、专用与共用路径区别、旧 Runtime 自动导入、兼容性/首次安装两轮区分，
+  以及精确授权后的备份、归档和恢复流程。目录清单只是源码候选位置，不代表已在第二台电脑发现这些目录。
+- 本次仅补充交接材料，不构成对第二台电脑卸载、移动或删除的授权；接手助手需先确认具体目录、数据价值和用户批准范围。
+- 新包输出到 `release-assets/trial-step4-handoff-v2/`，旧 `trial-step4/` 包保留供追溯，不再作为此次交接的推荐包；
+  安装器仍为同一份已核验 CI 制品，只更新说明与包内校验清单。
+- 接手版 ZIP 含 17 个文件，2,183,349 字节，SHA-256
+  `3E6377589E7797542537396A5D08B9F0D5F8454A2DA09497BA438F841772E3BA`。
+  36 项打包/记录器回归检查通过，最终交付 ZIP 已另外解压逐文件核验，交接文件与仓库源文档一致。

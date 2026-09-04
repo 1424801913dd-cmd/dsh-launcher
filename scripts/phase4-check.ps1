@@ -34,7 +34,7 @@ if ($RunProjectChecks) {
     }
 }
 
-foreach ($relativePath in @('LICENSE', 'README.md', 'HANDOFF.md', 'docs\CODE_SIGNING_POLICY.md', 'docs\LGPL_REVIEW.md', 'docs\PRIVACY.md', 'docs\RELEASE_REVIEW.md', 'docs\RELEASE_TEMPLATE.md', 'docs\RUNTIME_LICENSES.md', 'docs\SIGNPATH_APPLICATION.md', 'docs\THIRD_PARTY_NOTICES.md', 'docs\USER_GUIDE.md', 'docs\WINDOWS_ACCEPTANCE.md')) {
+foreach ($relativePath in @('LICENSE', 'README.md', 'HANDOFF.md', 'docs\CODE_SIGNING_POLICY.md', 'docs\LGPL_REVIEW.md', 'docs\PRIVACY.md', 'docs\RELEASE_REVIEW.md', 'docs\RELEASE_TEMPLATE.md', 'docs\RUNTIME_LICENSES.md', 'docs\SIGNPATH_APPLICATION.md', 'docs\THIRD_PARTY_NOTICES.md', 'docs\USER_GUIDE.md', 'docs\WINDOWS_ACCEPTANCE.md', 'docs\TRIAL_GUIDE.md', 'docs\TRIAL_RELEASE_NOTES.md', 'docs\TRIAL_FEEDBACK.md', 'docs\TEST_MACHINE_HANDOFF.md')) {
     $path = Join-Path $ProjectRoot $relativePath
     if (Test-Path -LiteralPath $path -PathType Leaf) {
         Add-QualityResult -Check "document:$relativePath" -Status 'PASS' -Details 'Present.'
@@ -43,7 +43,7 @@ foreach ($relativePath in @('LICENSE', 'README.md', 'HANDOFF.md', 'docs\CODE_SIG
     }
 }
 
-foreach ($relativePath in @('scripts\clean-runtime-install.ps1', 'scripts\collect-windows-acceptance.ps1', 'scripts\test-installer.ps1', 'scripts\test-launcher-startup.ps1')) {
+foreach ($relativePath in @('scripts\clean-runtime-install.ps1', 'scripts\collect-windows-acceptance.ps1', 'scripts\test-installer.ps1', 'scripts\test-launcher-startup.ps1', 'scripts\prepare-trial-package.ps1', 'scripts\test-trial-package.ps1', 'scripts\inspect-installed-launcher.ps1', 'scripts\launcher-uninstall-registry.ps1', 'scripts\test-installer-registration.ps1')) {
     $path = Join-Path $ProjectRoot $relativePath
     $tokens = $null
     $parseErrors = $null

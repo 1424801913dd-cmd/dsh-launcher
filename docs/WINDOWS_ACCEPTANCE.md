@@ -9,8 +9,8 @@
 | 验收范围 | 状态 | 证据 |
 | --- | --- | --- |
 | 一次性 Windows CI | PASS | [运行 33835360786](https://github.com/1424801913dd-cmd/dsh-launcher/actions/runs/33835360786)，全部步骤成功 |
-| Windows 10 x64 桌面 | NOT_RUN | 等待干净虚拟机及人工观察报告 |
-| Windows 11 x64 桌面 | NOT_RUN | 等待干净虚拟机及人工观察报告 |
+| Windows 10 x64 桌面 | NOT_RUN | 等待干净实体机或虚拟机的人工观察报告 |
+| Windows 11 x64 桌面 | NOT_RUN | 等待干净实体机或虚拟机的人工观察报告 |
 
 CI 对应分支 `codex/product-step3-acceptance`，受测提交 `f6b6a0b4148f23ba8d6f325cb262748aaa627e1b`；
 runner 为 Windows Server 2025，作业耗时 12 分 39 秒。后续仅归档文档的提交不属于此次受测提交。
@@ -52,7 +52,10 @@ runner 为 Windows Server 2025，作业耗时 12 分 39 秒。后续仅归档文
 
 ## Windows 10/11 桌面层
 
-分别准备最新补丁的 Windows 10 x64 和 Windows 11 x64 一次性虚拟机。快照中不得预装本项目、Node.js 或 DSH；WebView2 可保留为系统组件。每台机器执行以下检查：
+分别准备 Windows 10 x64 和 Windows 11 x64 的干净桌面环境，记录实际补丁和 build。可以使用另一台实体电脑，也可以使用一次性虚拟机；不要求购买或安装虚拟机软件。
+开始前不得预装本项目、Node.js、DSH、Git 或 Rust，WebView2 可保留为系统组件。若测试电脑已有开发环境或生产数据，不要为验收删除它们：先记作兼容性试用，不能标记干净基线通过。
+虚拟机可保存干净快照；实体机应记录安装前状态，使用无重要 DSH 数据的测试账户和独立工作区。新建账户不等于清除了机器级预装软件。
+一台 Windows 11 电脑不能代替 Windows 10 验收。项目所有者现计划在另一台实体电脑补测，但尚未产生实测结果。每台机器执行以下检查：
 
 | 检查 | 通过标准 |
 | --- | --- |
@@ -67,7 +70,9 @@ runner 为 Windows Server 2025，作业耗时 12 分 39 秒。后续仅归档文
 | 卸载与数据 | 程序和快捷方式移除，DSH_HOME、工作区和 sentinel 保留 |
 | SmartScreen | 如实记录实际界面；未签名制品出现警告属于已知发布阻断项 |
 
-完成每台 VM 后使用 `scripts/collect-windows-acceptance.ps1` 记录系统 build、WebView2、制品 SHA-256、Authenticode、SmartScreen 和所有观察项。脚本会拒绝 Windows Server、错误的 Windows 版本以及缺失的安装器；任何 `FAIL` 返回失败，任何 `NOT_RUN` 返回未完成。
+完成每台测试机后使用 `scripts/collect-windows-acceptance.ps1` 记录系统 build、WebView2、制品 SHA-256、Authenticode、SmartScreen 和所有观察项。
+schema v2 新增 `-EnvironmentKind physical|virtual|unknown` 和 `-BaselineClean YES|NO|UNKNOWN`；两者默认未知，不会自动宣称电脑干净。
+脚本会拒绝 Windows Server、错误的 Windows 版本以及缺失的安装器；任何 `FAIL` 返回失败，任何 `NOT_RUN`、未知环境或非干净基线均返回未完成。
 
 ## 完成门槛
 
@@ -79,4 +84,4 @@ runner 为 Windows Server 2025，作业耗时 12 分 39 秒。后续仅归档文
 
 代码签名不属于第三步功能验收的通过条件，但未签名和 SmartScreen 风险必须保留为正式发布阻断项。
 
-所有桌面检查项均为 `PASS` 且 SmartScreen 已实际观察后，记录脚本才标记完成；不得将本机自动化结果填作虚拟机人工观察结果。
+所有桌面检查项均为 `PASS`、SmartScreen 已实际观察、机器类型已记录且安装前干净基线确认后，记录脚本才标记完成；不得将本机自动化或模拟测试结果填作桌面人工观察结果。

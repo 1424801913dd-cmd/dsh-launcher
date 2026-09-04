@@ -6,6 +6,10 @@ param(
     [string]$InstallerPath,
     [Parameter(Mandatory = $true)]
     [string]$ReportPath,
+    [ValidateSet('physical', 'virtual', 'unknown')]
+    [string]$EnvironmentKind = 'unknown',
+    [ValidateSet('YES', 'NO', 'UNKNOWN')]
+    [string]$BaselineClean = 'UNKNOWN',
     [ValidateSet('PASS', 'FAIL', 'NOT_RUN')]
     [string]$Install = 'NOT_RUN',
     [ValidateSet('PASS', 'FAIL', 'NOT_RUN')]
@@ -72,14 +76,17 @@ $observations = [ordered]@{
     uninstallDataRetention = $UninstallDataRetention
 }
 $statuses = @($observations.Values)
-$complete = @($statuses | Where-Object { $_ -ne 'PASS' }).Count -eq 0 -and $SmartScreen -ne 'not-observed'
+$complete = @($statuses | Where-Object { $_ -ne 'PASS' }).Count -eq 0 -and
+    $SmartScreen -ne 'not-observed' -and $BaselineClean -eq 'YES' -and $EnvironmentKind -ne 'unknown'
 $failed = @($statuses | Where-Object { $_ -eq 'FAIL' }).Count -gt 0
 $signature = Get-AuthenticodeSignature -LiteralPath $installer
 $report = [ordered]@{
-    schemaVersion = 1
+    schemaVersion = 2
     recordedAtUtc = [DateTime]::UtcNow.ToString('o')
-    evidenceKind = 'manual disposable Windows desktop acceptance'
+    evidenceKind = 'manual Windows desktop acceptance'
     machine = [ordered]@{
+        environmentKind = $EnvironmentKind
+        baselineClean = $BaselineClean
         caption = $os.Caption
         version = $os.Version
         build = $build
@@ -111,6 +118,6 @@ if ($failed) {
     throw 'One or more Windows desktop acceptance observations failed.'
 }
 if (-not $complete) {
-    Write-Warning 'Acceptance report is incomplete: a check is NOT_RUN or SmartScreen has not been observed.'
+    Write-Warning 'Acceptance incomplete: checks, SmartScreen, environment kind or clean baseline are not confirmed.'
     exit 2
 }

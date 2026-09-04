@@ -41,7 +41,6 @@ const NODE_URL: &str = "https://nodejs.org/dist/v24.20.0/node-v24.20.0-win-x64.z
 const NODE_SHA256: &str = "6cac9ffbca8f6a47091e4b5c772e0606049c3871cb67d900c0cedde630e545ba";
 const RC2_VERSION: &str = "0.1.1-rc.2";
 const RC2_INTEGRITY: &str = "sha512-UP1UIh6q3Gme/yXRn/QL2P8IsVlv8Shpg22TRJIZPsCRWLm4CBiA1MUvXmJAfsOEETBMLAl+xWPtFw6ICsN3wg==";
-const ALPHA2_VERSION: &str = "0.1.2-alpha.2";
 const MIN_FREE_BYTES: u64 = 3 * 1024 * 1024 * 1024;
 const MAX_NODE_ARCHIVE_BYTES: u64 = 150 * 1024 * 1024;
 const MAX_NODE_EXTRACTED_BYTES: u64 = 1024 * 1024 * 1024;
@@ -467,8 +466,8 @@ pub fn initialize() -> Result<(VersionManagerState, Option<RuntimeRecord>), Stri
     let mut state = VersionManagerState {
         snapshot: VersionManagerSnapshot {
             channel,
-            recommended_version: Some(RC2_VERSION.to_string()),
-            alpha_version: Some(ALPHA2_VERSION.to_string()),
+            recommended_version: None,
+            alpha_version: None,
             active_version: None,
             previous_version: None,
             installed_versions: Vec::new(),
@@ -556,8 +555,15 @@ pub fn set_channel(state: &mut VersionManagerState, channel: &str) -> Result<(),
 }
 
 pub fn check_versions() -> Result<(String, Option<String>), String> {
-    let document: RegistryDocument = http_client()?
-        .get(REGISTRY_PACKAGE_URL)
+    checked_versions_from(&http_client()?, REGISTRY_PACKAGE_URL)
+}
+
+fn checked_versions_from(
+    client: &Client,
+    registry_url: &str,
+) -> Result<(String, Option<String>), String> {
+    let document: RegistryDocument = client
+        .get(registry_url)
         .send()
         .and_then(reqwest::blocking::Response::error_for_status)
         .map_err(|error| network_error_message("查询 npm 版本", &error))?
@@ -580,31 +586,113 @@ pub fn apply_checked_versions(
     state.snapshot.last_checked_ms = Some(now_ms());
 }
 
+pub fn invalidate_checked_versions(state: &mut VersionManagerState) {
+    state.snapshot.recommended_version = None;
+    state.snapshot.alpha_version = None;
+    state.snapshot.last_checked_ms = None;
+}
+
+pub fn validate_confirmed_target(
+    state: &VersionManagerState,
+    channel: &str,
+    expected_version: &str,
+) -> Result<(), String> {
+    validate_channel(channel)?;
+    validate_version(expected_version)?;
+    let displayed = match channel {
+        "recommended" => state.snapshot.recommended_version.as_deref(),
+        "alpha" => state.snapshot.alpha_version.as_deref(),
+        _ => unreachable!(),
+    };
+    if state.snapshot.last_checked_ms.is_none() || displayed != Some(expected_version) {
+        return Err("安装目标尚未查询或已变化，请重新查询版本并确认后安装。".to_string());
+    }
+    Ok(())
+}
+
+fn validate_target_version(expected: &str, actual: &str) -> Result<(), String> {
+    if expected != actual {
+        return Err(format!(
+            "安装目标已变化：你确认的是 {expected}，本次响应为 {actual}。已停止安装，请重新查询版本并确认。"
+        ));
+    }
+    Ok(())
+}
+
+pub fn validate_record_target(
+    record: &RuntimeRecord,
+    channel: &str,
+    expected: &str,
+) -> Result<(), String> {
+    validate_target_version(expected, &record.dsh_version)?;
+    if record.channel != channel {
+        return Err("已安装记录的通道与确认目标不一致；未自动激活，请检查版本记录。".to_string());
+    }
+    Ok(())
+}
+
 pub fn install_runtime<F, P>(
     root: &Path,
     cache: &Path,
     dsh_home: &Path,
     workspace: &Path,
     channel: &str,
-    mut progress: P,
+    expected_version: &str,
+    progress: P,
     smoke_test: F,
 ) -> Result<RuntimeRecord, String>
 where
     F: FnOnce(&RuntimeRecord) -> Result<(), String>,
     P: FnMut(u8, &str),
 {
+    install_runtime_from_registry(
+        root,
+        cache,
+        dsh_home,
+        workspace,
+        channel,
+        expected_version,
+        progress,
+        smoke_test,
+        &http_client()?,
+        REGISTRY_PACKAGE_URL,
+    )
+}
+
+// The registry URL is injectable only through this private function for local HTTP
+// regression tests. Production always uses the pinned HTTPS registry constant.
+fn install_runtime_from_registry<F, P>(
+    root: &Path,
+    cache: &Path,
+    dsh_home: &Path,
+    workspace: &Path,
+    channel: &str,
+    expected_version: &str,
+    mut progress: P,
+    smoke_test: F,
+    client: &Client,
+    registry_url: &str,
+) -> Result<RuntimeRecord, String>
+where
+    F: FnOnce(&RuntimeRecord) -> Result<(), String>,
+    P: FnMut(u8, &str),
+{
     validate_channel(channel)?;
-    progress(3, "正在查询 npm 官方 dist-tags…");
-    let (latest, alpha) = check_versions()?;
-    let version = match channel {
+    validate_version(expected_version)?;
+    progress(
+        3,
+        &format!("正在核对 {channel} 通道已确认目标 {expected_version}…"),
+    );
+    let (latest, alpha) = checked_versions_from(client, registry_url)?;
+    let current_target = match channel {
         "recommended" => latest,
         "alpha" => alpha.ok_or("npm 当前没有 alpha dist-tag。")?,
         _ => unreachable!(),
     };
-    let manifest = fetch_manifest(&version)?;
-    if manifest.version != version {
-        return Err("npm manifest 版本与请求版本不一致。".to_string());
-    }
+    validate_target_version(expected_version, &current_target)?;
+    let version = expected_version.to_string();
+    let manifest = fetch_manifest_from(client, registry_url, &version)?;
+    validate_target_version(expected_version, &manifest.version)?;
     let recipe = recipe_for(&version, &manifest.dist.integrity)?;
 
     let destination = root.join("versions").join(format!("dsh-{version}"));
@@ -613,6 +701,7 @@ where
     let existing_record = destination.join("runtime.json");
     if existing_record.is_file() {
         let record = read_record(&existing_record)?;
+        validate_record_target(&record, channel, expected_version)?;
         if record_valid(&record) && record.package_integrity == manifest.dist.integrity {
             progress(100, "该版本已安装并通过验证。");
             return Ok(record);
@@ -684,6 +773,7 @@ where
         smoke_tested: true,
         ..staged_record
     };
+    validate_record_target(&final_record, channel, expected_version)?;
     atomic_write_json(&staging.join("runtime.json"), &final_record)?;
     progress(92, "正在把已验证版本原子移入不可变版本目录…");
     fs::rename(&staging, &destination).map_err(|error| {
@@ -701,9 +791,35 @@ pub fn switch_to(root: &Path, version_or_id: &str) -> Result<RuntimeRecord, Stri
     switch_to_after_previous(root, version_or_id, || {})
 }
 
+pub fn switch_to_expected(
+    root: &Path,
+    version_or_id: &str,
+    channel: &str,
+    expected_version: &str,
+) -> Result<RuntimeRecord, String> {
+    switch_to_inner(
+        root,
+        version_or_id,
+        Some((channel, expected_version)),
+        || {},
+    )
+}
+
 fn switch_to_after_previous<F>(
     root: &Path,
     version_or_id: &str,
+    after_previous: F,
+) -> Result<RuntimeRecord, String>
+where
+    F: FnOnce(),
+{
+    switch_to_inner(root, version_or_id, None, after_previous)
+}
+
+fn switch_to_inner<F>(
+    root: &Path,
+    version_or_id: &str,
+    expected: Option<(&str, &str)>,
     after_previous: F,
 ) -> Result<RuntimeRecord, String>
 where
@@ -716,6 +832,9 @@ where
         .ok_or_else(|| format!("未找到已安装版本：{version_or_id}"))?;
     if !record_valid(&target) || !target.smoke_tested {
         return Err("目标 Runtime 未通过完整验证，拒绝切换。".to_string());
+    }
+    if let Some((channel, expected_version)) = expected {
+        validate_record_target(&target, channel, expected_version)?;
     }
     let active_path = root.join("active.json");
     if let Ok(current) = read_record(&active_path) {
@@ -804,6 +923,7 @@ fn validate_channel(channel: &str) -> Result<(), String> {
 
 fn validate_version(version: &str) -> Result<(), String> {
     if version.is_empty()
+        || semver::Version::parse(version).is_err()
         || version.len() > 80
         || !version
             .chars()
@@ -814,10 +934,14 @@ fn validate_version(version: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn fetch_manifest(version: &str) -> Result<PackageManifest, String> {
+fn fetch_manifest_from(
+    client: &Client,
+    registry_url: &str,
+    version: &str,
+) -> Result<PackageManifest, String> {
     validate_version(version)?;
-    let manifest: PackageManifest = http_client()?
-        .get(format!("{REGISTRY_PACKAGE_URL}/{version}"))
+    let manifest: PackageManifest = client
+        .get(format!("{registry_url}/{version}"))
         .send()
         .and_then(reqwest::blocking::Response::error_for_status)
         .map_err(|error| network_error_message(&format!("读取 DSH {version} manifest"), &error))?
@@ -1434,6 +1558,10 @@ pub(crate) fn replace_file(source: &Path, destination: &Path) -> Result<(), Stri
     fs::rename(source, destination)
         .map_err(|error| format!("无法更新 {}：{error}", destination.display()))
 }
+
+#[cfg(test)]
+#[path = "runtime_selection_tests.rs"]
+mod selection_tests;
 
 #[cfg(test)]
 mod tests {

@@ -7,11 +7,13 @@ param(
     [string]$ReportPath,
     [switch]$IsolatedEnvironment,
     [switch]$RequireAuthenticode,
-    [switch]$LaunchSmoke
+    [switch]$LaunchSmoke,
+    [ValidateSet('Silent', 'Passive')][string]$InstallerMode = 'Silent'
 )
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'launcher-uninstall-registry.ps1')
 
 if (-not $IsolatedEnvironment) {
     throw 'Installer smoke test is destructive to the registered app identity and requires -IsolatedEnvironment.'
@@ -21,6 +23,9 @@ if (Test-Path -LiteralPath (Join-Path $projectRoot 'DSH Launcher\dsh-launcher.ex
 }
 if (Get-Process -Name 'dsh-launcher' -ErrorAction SilentlyContinue) {
     throw 'DSH Launcher is running; refusing installer smoke test.'
+}
+if (@(Get-LauncherUninstallRegistration).Count -gt 0) {
+    throw 'Existing DSH Launcher uninstall registration found; refusing to overwrite another installation.'
 }
 
 $installer = (Resolve-Path -LiteralPath $InstallerPath).Path
@@ -39,7 +44,8 @@ $expectedVersion = (Get-Content -Raw -Encoding UTF8 (Join-Path $projectRoot 'pac
 New-Item -ItemType Directory -Force -Path $preservedDataRoot | Out-Null
 [System.IO.File]::WriteAllText($sentinel, 'preserve', [System.Text.UTF8Encoding]::new($false))
 
-$installerProcess = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$installRoot") -PassThru -Wait -WindowStyle Hidden
+$installFlag = if ($InstallerMode -eq 'Passive') { '/P' } else { '/S' }
+$installerProcess = Start-Process -FilePath $installer -ArgumentList @($installFlag, "/D=$installRoot") -PassThru -Wait -WindowStyle Hidden
 if ($installerProcess.ExitCode -ne 0) {
     throw "Installer exited with code $($installerProcess.ExitCode)."
 }
@@ -66,6 +72,8 @@ $installedVersion = (Get-Item -LiteralPath $installedExecutable).VersionInfo.Pro
 if ($installedVersion -ne $expectedVersion) {
     throw "Installed version $installedVersion does not match expected $expectedVersion."
 }
+$registrationBeforeLaunch = @(Get-LauncherUninstallRegistration)
+Assert-LauncherUninstallRegistration -Entries $registrationBeforeLaunch -InstallRoot $installRoot -ExpectedVersion $expectedVersion
 if ($RequireAuthenticode) {
     & (Join-Path $PSScriptRoot 'verify-authenticode.ps1') -Path $installer -RequireTimestamp
     & (Join-Path $PSScriptRoot 'verify-authenticode.ps1') -Path $installedExecutable -RequireTimestamp
@@ -81,6 +89,9 @@ if ($LaunchSmoke) {
     $launchSmokePassed = $true
 }
 
+$registrationAfterLaunch = @(Get-LauncherUninstallRegistration)
+Assert-LauncherUninstallRegistration -Entries $registrationAfterLaunch -InstallRoot $installRoot -ExpectedVersion $expectedVersion
+# The registered uninstall target has just been checked against this exact file.
 $uninstallerProcess = Start-Process -FilePath $uninstaller -ArgumentList '/S' -PassThru -Wait -WindowStyle Hidden
 if ($uninstallerProcess.ExitCode -ne 0) {
     throw "Uninstaller exited with code $($uninstallerProcess.ExitCode)."
@@ -93,6 +104,9 @@ if (Test-Path -LiteralPath $installedExecutable) {
 }
 if (-not (Test-Path -LiteralPath $sentinel -PathType Leaf)) {
     throw 'Data-retention sentinel was removed by uninstall.'
+}
+if (@(Get-LauncherUninstallRegistration).Count -gt 0) {
+    throw 'Uninstall registration remains after uninstall.'
 }
 
 $shortcutRoot = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\DSH Launcher'
@@ -109,6 +123,11 @@ $report = [ordered]@{
     installerSha256 = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
     expectedVersion = $expectedVersion
     installedVersion = $installedVersion
+    installerMode = $InstallerMode
+    uninstallRegistrationBeforeLaunch = $registrationBeforeLaunch
+    uninstallRegistrationAfterLaunch = $registrationAfterLaunch
+    uninstallRegistrationVerified = $true
+    uninstallRegistrationRemoved = $true
     silentInstallExitCode = $installerProcess.ExitCode
     silentUninstallExitCode = $uninstallerProcess.ExitCode
     installedFilesVerified = $true

@@ -1118,6 +1118,7 @@ async fn check_runtime_versions(
         if supervisor.version_manager.snapshot.busy {
             return Err("另一个版本管理操作正在进行。".to_string());
         }
+        runtime_manager::invalidate_checked_versions(&mut supervisor.version_manager);
         runtime_manager::set_operation(
             &mut supervisor.version_manager,
             Some("check"),
@@ -1202,6 +1203,7 @@ fn set_runtime_channel(
 #[tauri::command]
 async fn install_runtime_channel(
     channel: String,
+    expected_version: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<LauncherSnapshot, String> {
     let shared = state.supervisor.clone();
@@ -1210,12 +1212,17 @@ async fn install_runtime_channel(
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         ensure_runtime_change_allowed(&supervisor)?;
+        runtime_manager::validate_confirmed_target(
+            &supervisor.version_manager,
+            &channel,
+            &expected_version,
+        )?;
         runtime_manager::set_channel(&mut supervisor.version_manager, &channel)?;
         runtime_manager::set_operation(
             &mut supervisor.version_manager,
             Some("install"),
             1,
-            Some("正在准备安装…".to_string()),
+            Some(format!("正在准备安装已确认版本 {expected_version}…")),
         );
         supervisor.phase = DshPhase::Updating;
         supervisor.last_error = None;
@@ -1232,7 +1239,10 @@ async fn install_runtime_channel(
     shared_log(
         &shared,
         "info",
-        format!("开始安装 {channel} 通道 Runtime。"),
+        format!(
+            "开始安装：channel={channel}, expectedVersion={expected_version}, registry=https://registry.npmjs.org, confirmedAtMs={}",
+            now_ms()
+        ),
     );
 
     let operation_shared = shared.clone();
@@ -1243,6 +1253,7 @@ async fn install_runtime_channel(
             &dsh_home,
             &workspace,
             &channel,
+            &expected_version,
             |progress, message| {
                 let mut supervisor = operation_shared
                     .lock()
@@ -1257,8 +1268,9 @@ async fn install_runtime_channel(
             |record| smoke_test_runtime_record(record, &bridge_path, manager_for_smoke),
         )
         .and_then(|record| {
+            runtime_manager::validate_record_target(&record, &channel, &expected_version)?;
             if first_run {
-                runtime_manager::switch_to(&root, &record.id)
+                runtime_manager::switch_to_expected(&root, &record.id, &channel, &expected_version)
             } else {
                 Ok(record)
             }
@@ -1319,8 +1331,9 @@ async fn install_runtime_channel(
                     &mut supervisor.version_manager,
                     None,
                     0,
-                    Some("安装失败；活动 Runtime 未被覆盖。".to_string()),
+                    Some("安装失败；请重新查询并确认目标版本，活动 Runtime 未被覆盖。".to_string()),
                 );
+                runtime_manager::invalidate_checked_versions(&mut supervisor.version_manager);
                 supervisor.last_error = Some(error.clone());
             }
             shared_log(&shared, "error", error.clone());
@@ -2044,6 +2057,39 @@ mod tests {
         assert!(updater.pubkey.is_empty());
     }
 
+    #[test]
+    fn installation_requires_a_successfully_queried_and_unchanged_snapshot() {
+        let mut manager =
+            version_manager_for_test(Path::new("test-runtime"), Path::new("test-cache"));
+        assert!(
+            runtime_manager::validate_confirmed_target(&manager, "recommended", "0.1.1-rc.2")
+                .is_err()
+        );
+        runtime_manager::apply_checked_versions(
+            &mut manager,
+            "0.1.1-rc.2".into(),
+            Some("0.1.2-alpha.2".into()),
+        );
+        assert!(
+            runtime_manager::validate_confirmed_target(&manager, "recommended", "0.1.1-rc.2")
+                .is_ok()
+        );
+        assert!(
+            runtime_manager::validate_confirmed_target(&manager, "alpha", "0.1.2-alpha.2").is_ok()
+        );
+        assert!(
+            runtime_manager::validate_confirmed_target(&manager, "recommended", "0.1.2-rc.1")
+                .is_err()
+        );
+        assert!(runtime_manager::validate_confirmed_target(&manager, "alpha", "latest").is_err());
+        runtime_manager::invalidate_checked_versions(&mut manager);
+        assert!(
+            runtime_manager::validate_confirmed_target(&manager, "alpha", "0.1.2-alpha.2").is_err()
+        );
+        assert!(manager.snapshot.recommended_version.is_none());
+        assert!(manager.snapshot.alpha_version.is_none());
+    }
+
     fn version_manager_for_test(root: &Path, cache: &Path) -> VersionManagerState {
         VersionManagerState {
             snapshot: VersionManagerSnapshot {
@@ -2449,23 +2495,62 @@ mod tests {
             .join("resources")
             .join("dsh-bridge.mjs");
         let manager = version_manager_for_test(&root, &cache);
+        let (expected_version, _) =
+            runtime_manager::check_versions().expect("resolve confirmed target");
         let record = runtime_manager::install_runtime(
             &root,
             &cache,
             &dsh_home,
             &workspace,
             "recommended",
+            &expected_version,
             |_progress, message| println!("{message}"),
             |record| smoke_test_runtime_record(record, &bridge_path, manager),
         )
         .expect("install and smoke test recommended runtime");
         assert!(record.managed);
         assert!(record.smoke_tested);
+        assert_eq!(record.dsh_version, expected_version);
+        let package: serde_json::Value = serde_json::from_slice(
+            &fs::read(
+                Path::new(&record.dsh_entry)
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .join("package.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(package["version"].as_str(), Some(expected_version.as_str()));
         assert!(Path::new(&record.node_path).is_file());
         assert!(Path::new(&record.dsh_entry).is_file());
 
-        let active = runtime_manager::switch_to(&root, &record.id).expect("activate runtime");
+        let active = runtime_manager::switch_to_expected(
+            &root,
+            &record.id,
+            "recommended",
+            &expected_version,
+        )
+        .expect("activate runtime");
         assert_eq!(active.id, record.id);
+        assert_eq!(active.dsh_version, expected_version);
+        let saved: RuntimeRecord =
+            serde_json::from_slice(&fs::read(root.join("active.json")).unwrap()).unwrap();
+        assert_eq!(saved.dsh_version, expected_version);
+        if let Some(report_path) = std::env::var_os("DSH_LAUNCHER_TEST_VERSION_REPORT") {
+            let evidence = serde_json::json!({
+                "channel": "recommended",
+                "expectedVersion": expected_version,
+                "packageVersion": package["version"],
+                "runtimeVersion": record.dsh_version,
+                "activeVersion": saved.dsh_version,
+                "passed": true
+            });
+            fs::write(report_path, serde_json::to_vec_pretty(&evidence).unwrap())
+                .expect("write version consistency evidence");
+        }
         fs::remove_dir_all(&root).expect("remove private install test root");
     }
 }

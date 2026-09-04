@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import type { DshPhase, LauncherSnapshot, RuntimeChannel } from "./types";
+import { captureInstallRequest, selectedRuntimeVersion, unqueriedVersions } from "./runtimeSelection";
 
 const phaseLabels: Record<DshPhase, string> = {
   notInstalled: "尚未安装",
@@ -36,8 +37,7 @@ const initialSnapshot: LauncherSnapshot = {
   logs: [],
   versionManager: {
     channel: "recommended",
-    recommendedVersion: "0.1.1-rc.2",
-    alphaVersion: "0.1.2-alpha.2",
+    ...unqueriedVersions,
     activeVersion: null,
     previousVersion: null,
     installedVersions: [],
@@ -46,7 +46,6 @@ const initialSnapshot: LauncherSnapshot = {
     operation: null,
     progress: 0,
     message: null,
-    lastCheckedMs: null,
     preflight: {
       windowsSupported: false,
       windowsVersion: null,
@@ -120,6 +119,7 @@ export default function App() {
     workspace: "",
   });
   const pathsInitialized = useRef(false);
+  const initialVersionCheckStarted = useRef(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -186,6 +186,14 @@ export default function App() {
     [call],
   );
 
+  useEffect(() => {
+    if (!initialVersionCheckStarted.current && snapshot.versionManager.preflight.runtimeRoot &&
+        !snapshot.versionManager.busy && !busy) {
+      initialVersionCheckStarted.current = true;
+      void call("check_runtime_versions");
+    }
+  }, [call, busy, snapshot.versionManager.busy, snapshot.versionManager.preflight.runtimeRoot]);
+
   const chooseChannel = useCallback(
     async (channel: RuntimeChannel) => {
       if (channel === snapshot.versionManager.channel) return;
@@ -195,18 +203,24 @@ export default function App() {
   );
 
   const installSelectedChannel = useCallback(async () => {
+    let request;
+    try {
+      request = captureInstallRequest(snapshot.versionManager);
+    } catch (error) {
+      setRequestError(String(error));
+      return;
+    }
     if (snapshot.versionManager.firstRunRequired) setOnboardingActive(true);
-    const channel = snapshot.versionManager.channel;
     if (
-      channel === "alpha" &&
+      request.channel === "alpha" &&
       !window.confirm(
-        "Alpha 是主动选择的预览通道，可能包含不稳定改动。它会旁路安装并经过 smoke test，不会静默覆盖当前版本。继续吗？",
+        `确认安装 Alpha ${request.expectedVersion}？预览通道可能不稳定，将旁路安装并进行 smoke test。`,
       )
     ) {
       return;
     }
-    await call("install_runtime_channel", { channel });
-  }, [call, snapshot.versionManager.channel, snapshot.versionManager.firstRunRequired]);
+    await call("install_runtime_channel", request);
+  }, [call, snapshot.versionManager]);
 
   const saveFirstRunPaths = useCallback(async () => {
     if (!window.confirm("保存这些路径并重启启动器？目前不会移动或删除任何已有文件。")) return;
@@ -327,10 +341,7 @@ export default function App() {
   const canStart = snapshot.runtime.installed && ["stopped", "crashed"].includes(snapshot.phase);
   const canStop = snapshot.phase === "running";
   const canOpen = snapshot.phase === "running" && Boolean(snapshot.webUrl);
-  const selectedTarget =
-    snapshot.versionManager.channel === "alpha"
-      ? snapshot.versionManager.alphaVersion
-      : snapshot.versionManager.recommendedVersion;
+  const selectedTarget = selectedRuntimeVersion(snapshot.versionManager);
   const selectedInstalled = snapshot.versionManager.installedVersions.some(
     (runtime) => runtime.dshVersion === selectedTarget,
   );
@@ -479,11 +490,18 @@ export default function App() {
                 </button>
               </div>
               <button
+                className="button button-ghost"
+                disabled={runtimeLocked}
+                onClick={() => void call("check_runtime_versions")}
+              >
+                {snapshot.versionManager.operation === "check" ? "正在查询版本…" : "查询 / 刷新目标版本"}
+              </button>
+              <button
                 className="button button-primary wizard-install"
                 disabled={!preflightReady || runtimeLocked || !selectedTarget}
                 onClick={() => void installSelectedChannel()}
               >
-                {snapshot.lastError || requestError ? "重试安装" : "开始下载并安装"} {selectedTarget ?? "所选版本"}
+                {selectedTarget ? `${snapshot.lastError || requestError ? "重试安装" : "开始下载并安装"} ${selectedTarget}` : "请先查询目标版本"}
               </button>
             </>
           )}

@@ -38,6 +38,7 @@ Runtime Bundle 更新期间执行 `npm install` 或网络生命周期脚本。
 签名密钥、GitHub Actions Secrets 和发布步骤见 [docs/RELEASE.md](docs/RELEASE.md)。
 普通用户的首次安装、目录说明和故障排查见 [docs/USER_GUIDE.md](docs/USER_GUIDE.md)。
 干净 Windows 自动化与桌面验收矩阵见 [docs/WINDOWS_ACCEPTANCE.md](docs/WINDOWS_ACCEPTANCE.md)。
+2026-09-04：一次性 Windows CI 的从零 Runtime 安装及安装器启停/卸载验收已通过；Windows 10/11 桌面验收仍待执行，当前制品仍未签名。
 
 ## 安全边界
 

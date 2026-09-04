@@ -2,6 +2,30 @@
 
 第三步的目标是验证普通用户无需 Node.js、npm、Git、Rust 或终端操作即可完成安装和使用。GitHub 托管的 Windows runner 是 Windows Server，只能证明构建、安装器和 Runtime 自动化路径，不能替代 Windows 10/11 桌面验收。
 
+## 本轮收尾状态（2026-09-04）
+
+项目所有者确认暂时没有一次性桌面虚拟机，本轮按“完成 CI、保留桌面验收待办”收尾，不将第三步完整桌面验收标记为通过。
+
+| 验收范围 | 状态 | 证据 |
+| --- | --- | --- |
+| 一次性 Windows CI | PASS | [运行 33835360786](https://github.com/1424801913dd-cmd/dsh-launcher/actions/runs/33835360786)，全部步骤成功 |
+| Windows 10 x64 桌面 | NOT_RUN | 等待干净虚拟机及人工观察报告 |
+| Windows 11 x64 桌面 | NOT_RUN | 等待干净虚拟机及人工观察报告 |
+
+CI 对应分支 `codex/product-step3-acceptance`，受测提交 `f6b6a0b4148f23ba8d6f325cb262748aaa627e1b`；
+runner 为 Windows Server 2025，作业耗时 12 分 39 秒。后续仅归档文档的提交不属于此次受测提交。
+
+- 前端类型检查/构建、Rust 格式检查通过；Rust 库测试 30 通过、0 失败、3 按设计忽略，另有 1 项进程崩溃集成测试按设计忽略。
+- 从零 Runtime 测试独立执行并通过，报告耗时 104.531 秒，覆盖中文空格工作区、下载校验、依赖安装和隔离启停；残留受管进程为 0。
+- 已安装 EXE 初始化与存活检查通过；静默安装/卸载退出码均为 0，安装资源/版本核对通过，程序及开始菜单目录移除，DSH_HOME sentinel 保留。
+- CI 上生产活动指针前后均不存在（报告中为 `null`），不能据此声称验证了已有生产数据的兼容性；本机既有数据未变的证据见 `HANDOFF.md`。
+
+已下载 artifact `phase4-unsigned-installer-smoke` 到本机 `phase4-results/ci-33835360786/`，核对三份 JSON 报告及启动日志。
+安装器 `DSH Launcher_0.4.0_x64-setup.exe` 为 2,167,548 字节，下载后 SHA-256 与 CI 安装报告一致：
+`949744407DABBCA21CD0AA3D7CE4F8FC93FDC2C935FCCD03E6081DF1ADA6E0DF`。
+已安装内部 EXE 的报告 SHA-256 为 `6ED51495F5D020AD564E618CC498E375EA6DD6AD9CC223D7BD13DE8ACB0D2981`。
+安装器实际检查为 `NotSigned`，仅供受控验收；没有创建正式 Release 或宣称通过 SmartScreen。
+
 ## 自动化层
 
 手动工作流 `.github/workflows/phase4-installer.yml` 在一次性 Windows runner 中执行：

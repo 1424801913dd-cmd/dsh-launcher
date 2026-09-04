@@ -1276,7 +1276,7 @@ Authenticode、干净虚拟机和发布验收完成前，不得把本地 `0.4.0`
   批准的发布限制，并作为安装资源随包提供；
 - 本步骤没有迁移或删除本机现有 D 盘 Runtime、缓存和 DSH_HOME。
 
-## 二十五、产品化第三步：干净 Windows 验收（2026-09-04，进行中）
+## 二十五、产品化第三步：干净 Windows 验收（2026-09-04，自动化已验收，桌面待办）
 
 ### 1. 自动化入口
 
@@ -1322,6 +1322,18 @@ Authenticode、干净虚拟机和发布验收完成前，不得把本地 `0.4.0`
   `00505412E686C8E622EC070DA266DC68AFF32EF6FA070F2FD6D6987661834180`。
   该证据只证明本机启动初始化，不代替干净机界面验收；
 - 宿主机存在同一应用标识的生产安装，按安全护栏未在宿主机执行安装/卸载 smoke。Windows 10/11 一次性
-  虚拟机报告仍待真实运行，因此第三步状态保持“进行中”。
+  虚拟机报告仍待真实运行，完整桌面验收未完成；本轮自动化收尾见下节。
 - `phase4-check.ps1 -RequireInstaller` 通过非签名检查，报告 `phase4-results/product-step3-quality.json`；
   两个制品未签名及缺少证书仍为预期 WARN。安装器生产安装保护和启动 smoke 拒绝复用目录的保护已实际触发验证。
+
+### 4. 远端 CI 收尾与保留待办
+
+- 已将本轮改动提交并推送到 `codex/product-step3-acceptance`，受测提交为
+  `f6b6a0b4148f23ba8d6f325cb262748aaa627e1b`；未合并到远端 `main`，未创建正式 Release。
+- [GitHub Actions 运行 33835360786](https://github.com/1424801913dd-cmd/dsh-launcher/actions/runs/33835360786)
+  全部成功，Windows Server 2025 一次性 runner，耗时 12 分 39 秒；前端/Rust 检查、从零 Runtime 安装、
+  未签名 NSIS 构建、已安装程序启动、静默卸载、用户数据 sentinel 保留均通过。
+- 三份 JSON 报告、启动日志及安装器已下载到 `phase4-results/ci-33835360786/`，安装器哈希已与报告核对一致；
+  完整摘要及制品身份见 `docs/WINDOWS_ACCEPTANCE.md` 的“本轮收尾状态”。CI 制品与本机构建不是同一个文件，勿混用哈希。
+- 项目所有者明确选择“暂时没有，先完成 CI 并保留桌面验收待办”。因此本轮 CI/归档工作已收尾；
+  Windows 10/11 桌面均保留 `NOT_RUN`，未来按验收矩阵补测。代码签名和 SmartScreen 风险仍是正式发布阻断项。

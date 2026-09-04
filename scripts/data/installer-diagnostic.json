@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "version": "0.4.1",
+  "diagnosticId": "0.4.1-installer-diagnostic-ci33863397833",
+  "diagnosticOnly": true,
+  "installationEnabled": false,
+  "sourceCommit": "5a4f9d9f26b0fecfb76c9d0092056bd1bfe7ab91",
+  "ciRunUrl": "https://github.com/1424801913dd-cmd/dsh-launcher/actions/runs/33863397833",
+  "artifactName": "installer-diagnostic-READ-ONLY",
+  "artifactExeName": "DSH Launcher_0.4.1_x64-setup.exe",
+  "packageExeName": "DSH-Launcher-INSTALLER-DIAGNOSTIC.exe",
+  "exeBytes": 104941,
+  "exeSha256": "2311E07416640CC5DFC1E7EB9BB534B1A727E1F69F659C790FD6C173077DFA13",
+  "signatureStatus": "NotSigned",
+  "distribution": "controlled-read-only-diagnostic",
+  "logEncoding": "UTF-16LE with BOM",
+  "rootCauseConfirmed": false,
+  "normalCandidateId": "0.4.1-trial-ci33857469193"
+}

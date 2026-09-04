@@ -40,6 +40,7 @@ Runtime Bundle 更新期间执行 `npm install` 或网络生命周期脚本。
 干净 Windows 自动化与桌面验收矩阵见 [docs/WINDOWS_ACCEPTANCE.md](docs/WINDOWS_ACCEPTANCE.md)。
 2026-09-04：一次性 Windows CI 的从零 Runtime 安装及安装器启停/卸载验收已通过；Windows 10/11 桌面验收仍待执行，当前制品仍未签名。
 后续 Windows 10 实体机发现 0.4.0 版本漂移，旧候选停止使用；当前 0.4.1 修复和复测范围见 [版本漂移复测说明](docs/VERSION_DRIFT_RETEST.md)。旧 CI 通过不等于该桌面缺陷已关闭。
+测试端随后报告 0.4.1 在“已安装/无法卸载”页面被阻断，尚未完成版本漂移复测。当前先使用[专用只读安装器诊断流程](docs/INSTALLER_DIAGNOSTIC_README.md)采证；该诊断包不是可安装修复版，不可将其计为桌面验收通过。
 
 ## 受控试用准备
 

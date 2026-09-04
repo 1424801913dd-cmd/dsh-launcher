@@ -1412,3 +1412,31 @@ Authenticode、干净虚拟机和发布验收完成前，不得把本地 `0.4.0`
 - 最终交付 ZIP：`release-assets/trial-step4-0.4.1/DSH-Launcher-0.4.1-trial-ci33857469193.zip`，2,193,728 字节、21 文件；SHA-256 `2923E740E2144517D2C7F5A82281C6A229AA53B4942C443EB547FFD76FACDDBF`。安装器 2,169,407 字节，SHA-256 `B92DE28E8018D7D744F6F44BFDABE0E5C2C98B926D47D4D3EEA3812A24F1FAEF`；内部 EXE `E878F4E728D0D6A476B6B553C52D51A4BD603C824C693228966A71696F51DF23`。本机 Release EXE 和旧 bundle 不是此 CI 安装器，不混用摘要。
 - 48 项打包/记录器回归通过，报告 `phase4-results/trial-tests-344c7bb77a5e4f32a8652adbe8e8009b/regression-report.json`。最终交付 ZIP 另行解压到 `phase4-results/final-0.4.1-delivery-unpacked`，20 条文件摘要、21 文件总数、11 份当前交接/脚本源文件均核对一致。旧 0.4.0 证据 ZIP 哈希仍为 `3E6377589E7797542537396A5D08B9F0D5F8454A2DA09497BA438F841772E3BA`。
 - Windows 10 的旧候选 FAIL 不会自动变为新版 PASS，0.4.1 桌面观察仍待测试端回传；Windows 11 仍未测试。新版仍 NotSigned，不能作为正式稳定发行。
+
+## 二十八、0.4.1 安装器“已安装/无法卸载”只读诊断包（2026-09-04）
+
+### 新缺陷与采证边界
+
+- 测试端回传 `release-assets/trial-step4-0.4.1/DEFECT-REPORT-0.4.1-phantom-existing-install.md` 及截图：隔离旧目录、检查四视图卸载注册后，普通 0.4.1 仍进入“已安装”页，默认卸载操作失败。当前安装验收为 FAIL，版本漂移复测尚未继续。
+- 界面上的“旧的”是 NSIS 的年龄描述，不是具体 DisplayVersion；不能据此断定版本字段为空。目录缺失及外部注册表快照也不能代替安装器进程自己的读取证据。根因尚未确认，不清理测试机、不给缺陷直接判 PASS。
+- 当前交付是采证阶段的新包，**不是 0.4.2 修复版，不可用于安装或完成桌面验收**。下一步必须由测试端按包内交接文档回传脱敏日志，再按真实分支定位修复。
+
+### 实现与验证
+
+- 独立配置 `src-tauri/tauri.diagnostic.conf.json` 选择诊断模板。模板派生自 Tauri CLI 2.11.4，附上游 MIT 许可；普通应用配置、普通候选身份和原 ZIP 均未替换。
+- 保留产品名、制造者、当前用户安装模式、旧安装检测、版本比较与维护页选项逻辑；增加四视图读取结果、NSIS/WiX 分支、实际 DisplayVersion 和安全阻断日志。对比原模板的检测/选择代码，差异仅为日志插入及用于记录空值分支的等价条件展开。
+- 实际安装/卸载执行、注册表写入、应用复制、快捷方式和启动命令移除；仅新建 EXE 同目录 PID 日志，拒绝覆盖已有日志。UTF-16LE BOM 保留中文。NSIS 自身仍会使用临时插件目录，日志可能含账户和路径，回传前必须脱敏。
+- 本地静态门禁和只读静默运行通过，未运行普通安装/卸载器；生产活动指针及精确卸载注册前后不变。远端前两轮 `33862801412`、`33863357414` 因检查器的 CRLF 与负例变异方式失败，分别修正后才启动最终一轮，未将失败证据用于打包。
+- 最终受测提交 `5a4f9d9f26b0fecfb76c9d0092056bd1bfe7ab91`；[CI 33863397833](https://github.com/1424801913dd-cmd/dsh-launcher/actions/runs/33863397833) 全部成功，任务耗时 13 分 4 秒。真实 NSIS 页面导航的 clean、old-valid、orphan-default、missing-uninstaller，以及 silent、passive 共六场景通过；记录未改变、sentinel 保留、默认应用目录未创建。
+- 六份 CI 日志均检查到 UTF-16LE BOM 和 16 条四视图观察；clean 跳过维护页，三个旧记录夹具到达维护页并阻断卸载。`old-valid` 使用可执行占位件而非真实旧安装；这些是一次性 runner 的诊断安全测试，不能证明测试端原缺陷复现或已修复。
+- `scripts/test-installer-diagnostic-package.ps1` 的 21 项打包回归通过：白名单、逐文件摘要、拒绝覆盖、EXE 篡改、失败/缺失报告、缺失真实页面导航或阻断证据、记录/数据变更报告等。报告为 `phase4-results/diagnostic-package-test-7e371975210e4412957541c1dec71941/regression-report.json`。
+
+### 最终交付与后续
+
+- 新包：`release-assets/installer-diagnostic-0.4.1/DSH-Launcher-0.4.1-installer-diagnostic-ci33863397833.zip`，9 文件，92,640 字节；SHA-256 `FCAABE6C087EBAB45C262265D78945E51459F1593D68D042D72EDB50842C7ED9`。
+- 包内 EXE 重命名为 `DSH-Launcher-INSTALLER-DIAGNOSTIC.exe`，104,941 字节，NotSigned，SHA-256 `2311E07416640CC5DFC1E7EB9BB534B1A727E1F69F659C790FD6C173077DFA13`。这是已通过上述 CI 的原始字节，不是本机构建件。
+- 独立元数据为 `scripts/data/installer-diagnostic.json`，不修改 `trial-candidate.json`；ZIP 包含 `READ-ME-FIRST.md`、`CODEX-HANDOFF.md`、`FEEDBACK.md`、CI 报告、两份许可和摘要清单，不含本机/测试机原始日志或用户数据。
+- 最终交付 ZIP 另行解压到 `phase4-results/final-installer-diagnostic-33863397833-unpacked`，9 文件白名单、8 条摘要、7 份源文档/元数据/报告、EXE 身份及未签名状态均核对一致。
+- 旧 0.4.1 ZIP 的 SHA-256 仍为 `2923E740E2144517D2C7F5A82281C6A229AA53B4942C443EB547FFD76FACDDBF`；旧接手版 0.4.0 ZIP 仍为 `3E6377589E7797542537396A5D08B9F0D5F8454A2DA09497BA438F841772E3BA`。
+- 测试端保持旧现场与归档原样，按同一账户/启动方式运行诊断 EXE，到“已安装”或目录页停止并关闭，回传脱敏日志及反馈；不选绕过卸载，不改权限猜测，不执行日志中的命令。
+- 未合并 main、未创建 Release、未更改签名门禁、未操作第二台电脑。可安装修复候选、Windows 10 复测与 Windows 11 桌面验收仍待后续，不以本包的安全测试代替。

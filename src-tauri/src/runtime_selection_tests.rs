@@ -21,8 +21,14 @@ fn mock_registry(responses: Vec<(u16, String)>) -> (String, std::thread::JoinHan
                     Err(error) => panic!("mock registry accept: {error}"),
                 }
             };
+            // Windows may inherit the listener's nonblocking mode. Accept is
+            // bounded above, but request I/O must wait for the client's bytes.
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            stream
+                .set_write_timeout(Some(Duration::from_secs(3)))
                 .unwrap();
             let mut request = Vec::new();
             let mut buffer = [0; 1024];

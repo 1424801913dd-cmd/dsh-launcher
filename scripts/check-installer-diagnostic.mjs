@@ -28,5 +28,5 @@ for (const hive of ['HKCU','HKLM']) for (const view of [32,64]) {
 assertSafe(rawSource);
 assertSafe(rawSource.replace(/\r?\n/g, '\r\n'));
 assert.throws(() => assertSafe(rawSource + '\nExecWait "must-not-run.exe"\n'));
-assert.throws(() => assertSafe(rawSource.replace('action=uninstall-blocked', 'action=unsafe')));
+assert.throws(() => assertSafe(rawSource.replaceAll('action=uninstall-blocked', 'action=unsafe')));
 console.log('PASS: diagnostic template has no install/uninstall/registry-write commands; sections block, all four registry views logged.');

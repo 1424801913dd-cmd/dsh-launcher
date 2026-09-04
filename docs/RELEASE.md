@@ -1,13 +1,20 @@
 # 签名发布说明
 
+## 当前状态
+
+截至 2026-09-04，SignPath Foundation 申请因项目公开采用度和独立信任信号不足而未获批准。因此本项目当前
+没有可用的 SignPath Foundation Authenticode 签名资格，`.github/workflows/release.yml` 仍是预备流程：缺少
+SignPath 的真实配置时必须失败关闭，不得填写伪造值、借用其他项目身份或声称制品已由 SignPath Foundation
+签名。
+
 仓库中的普通本地构建默认关闭所有远程更新入口。只有发布流水线同时注入真实 HTTPS 地址与公钥时，签名 Runtime 更新和 Tauri 启动器自更新才会启用。不要把生产私钥提交到仓库。
 
 ## 两套独立签名密钥
 
 1. Runtime Release Ed25519 密钥用于签名 Runtime Bundle 的 SHA-256 摘要和 Runtime manifest 原始 payload。客户端只内嵌 32 字节公钥。
 2. Tauri updater 密钥用于签名启动器更新制品，由 Tauri 官方 updater 验证。
-3. Windows Authenticode 使用 SignPath.io 托管的 SignPath Foundation 证书。私钥仅存在于 SignPath HSM，
-   不下载到本机或 GitHub Actions runner。
+3. Windows Authenticode 计划在未来获批后使用 SignPath.io 托管的 SignPath Foundation 证书。当前该路径尚未
+   启用；启用后私钥仅存在于 SignPath HSM，不下载到本机或 GitHub Actions runner。
 
 在受控位置生成 Runtime Release 密钥，例如 D 盘的离线密钥目录：
 
@@ -26,6 +33,9 @@ npm run tauri -- signer generate -w 'D:\Secrets\dsh-launcher\tauri-updater.key'
 ## GitHub Actions 配置
 
 `.github/workflows/release.yml` 是人工触发的 Windows 发布流水线。需要配置：
+
+当前不得运行该流程发布正式版本，因为 SignPath Foundation 尚未批准项目。下列 SignPath 配置只能使用服务商
+实际签发的值。
 
 - `DSH_RUNTIME_SIGNING_PRIVATE_KEY`：Base64 PKCS#8 Runtime 私钥；
 - `DSH_RUNTIME_PUBLIC_KEY`：Base64 原始 32 字节 Runtime 公钥；
@@ -86,9 +96,20 @@ SignPath 项目必须绑定 <https://github.com/1424801913dd-cmd/dsh-launcher> �
 
 ## SignPath Foundation 申请与首次启用
 
-申请入口：<https://signpath.org/apply>。申请时提供公开仓库、MIT 许可证、已有 Release、隐私说明、
-本文件和 `CODE_SIGNING_POLICY.md`。项目获批前不要把占位 organization、project、policy 或 artifact
-configuration 值写入仓库；获批后按 SignPath 控制台的真实值配置 GitHub Variables 和 Secret。
+申请记录和当前状态见 [SIGNPATH_APPLICATION.md](SIGNPATH_APPLICATION.md)。下一次申请应在项目已有真实 Windows
+发行历史、持续维护记录、社区参与和独立外部引用之后提交，不能原样重复上一轮材料。申请入口：
+<https://signpath.org/apply>。申请时提供公开仓库、MIT 许可证、已有 Release、隐私说明、本文件和
+`CODE_SIGNING_POLICY.md`。
+
+项目获批前不要把占位 organization、project、policy 或 artifact configuration 值写入仓库；获批后按
+SignPath 控制台的真实值配置 GitHub Variables 和 Secret。
 
 首次运行发布工作流时需要在 SignPath 中分别批准 EXE 和 NSIS 两次请求。工作流最多等待每次批准一小时；
 超时不会上传或发布未签名制品，可以在重新触发前从 SignPath 审计记录确认请求状态。
+
+## 获批前的预览版本边界
+
+如果维护者以后决定用未签名制品积累真实用户反馈，应使用独立的预发布流程，而不是削弱或绕过现有签名发布
+流程。预览版本必须显著标记 `Unsigned Preview` 和 Windows“未知发布者”风险，提供源码提交号、SHA-256、
+许可证材料和安装测试结果，并关闭启动器自动更新。未签名预览不得使用正式发布模板，也不得描述为已通过
+SignPath、Authenticode 或 SmartScreen 验证。

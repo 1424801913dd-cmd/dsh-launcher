@@ -39,9 +39,11 @@ export interface InstalledRuntime {
 
 export interface PreflightInfo {
   windowsSupported: boolean;
+  windowsVersion: string | null;
   architecture: string;
   architectureSupported: boolean;
   webview2Available: boolean;
+  webview2Version: string | null;
   freeBytes: number | null;
   enoughDiskSpace: boolean;
   runtimeRoot: string;

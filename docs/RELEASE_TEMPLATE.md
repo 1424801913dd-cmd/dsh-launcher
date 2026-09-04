@@ -2,6 +2,9 @@
 
 > Unofficial and independently maintained; not reviewed, sponsored, or endorsed by DeepSeek.
 
+> Template status: reserved for releases produced after an Authenticode signing provider has been approved and configured.
+> Do not use this template for unsigned preview builds.
+
 DSH Launcher is a local Windows lifecycle manager compatible with DeepSeek Harness (`dsh`). DeepSeek Harness is currently a developer preview and may introduce compatibility-breaking changes.
 
 ## This release
@@ -29,7 +32,7 @@ This draft must remain unpublished while any release quality gate reports `FAIL`
 
 ## Code signing policy
 
-Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by
-[SignPath Foundation](https://signpath.org/). Builds are submitted from this repository's GitHub Actions trusted build;
-every release requires explicit SignPath approval. See
+For a release produced under an approved SignPath Foundation subscription: Free code signing provided by
+[SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/). Builds are submitted
+from this repository's GitHub Actions trusted build; every release requires explicit SignPath approval. See
 [docs/CODE_SIGNING_POLICY.md](https://github.com/1424801913dd-cmd/dsh-launcher/blob/main/docs/CODE_SIGNING_POLICY.md).

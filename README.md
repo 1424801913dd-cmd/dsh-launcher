@@ -16,6 +16,13 @@ In English: this is an unofficial, independently developed project; it is not re
 普通本地构建默认关闭远程更新。只有发布流水线注入真实 HTTPS 地址与公钥后才会启用，客户端不会在
 Runtime Bundle 更新期间执行 `npm install` 或网络生命周期脚本。
 
+## 本地数据目录
+
+全新安装默认把 Runtime 与缓存分别放在当前用户的
+`%LOCALAPPDATA%\DSH Launcher\runtime` 和 `%LOCALAPPDATA%\DSH Launcher\cache`，DSH 用户数据默认位于
+`%LOCALAPPDATA%\DeepSeek Harness\home`。存在 `D:\Tools\dsh-launcher` 活动指针或已安装 Runtime 记录时，
+启动器会继续使用原 D 盘目录以兼容早期版本，但不会仅因电脑存在 D 盘就为新用户创建这些目录。
+
 ## 开发
 
 项目当前优先使用 D 盘的 Node、Rust 与缓存环境，具体初始化逻辑见
@@ -29,6 +36,8 @@ Runtime Bundle 更新期间执行 `npm install` 或网络生命周期脚本。
 构建产物位于 `src-tauri\target\release\dsh-launcher.exe`。
 
 签名密钥、GitHub Actions Secrets 和发布步骤见 [docs/RELEASE.md](docs/RELEASE.md)。
+普通用户的首次安装、目录说明和故障排查见 [docs/USER_GUIDE.md](docs/USER_GUIDE.md)。
+干净 Windows 自动化与桌面验收矩阵见 [docs/WINDOWS_ACCEPTANCE.md](docs/WINDOWS_ACCEPTANCE.md)。
 
 ## 安全边界
 
@@ -45,6 +54,11 @@ MIT。详见 [LICENSE](LICENSE)。DeepSeek Harness 及相关标识归其各自�
 
 ## Code signing policy
 
-Windows 发布制品通过 SignPath 的受信构建流水线签名。Free code signing provided by
-[SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/)。团队角色、
-审批边界、隐私和双阶段签名顺序见 [docs/CODE_SIGNING_POLICY.md](docs/CODE_SIGNING_POLICY.md)。
+当前状态（2026-09-04）：SignPath Foundation 申请因项目尚缺少足够的公开采用度、独立引用和持续参与信号而
+未获批准。当前没有任何公开制品由 SignPath Foundation 签名，签名发布流水线保持失败关闭，也不会退回发布
+未签名正式版本。
+
+仓库保留了未来获批后使用的受信构建与双阶段签名设计。届时适用的归属文案为：Free code signing provided by
+[SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/)。当前状态、团队角色、
+审批边界和隐私要求见 [docs/CODE_SIGNING_POLICY.md](docs/CODE_SIGNING_POLICY.md)，申请记录见
+[docs/SIGNPATH_APPLICATION.md](docs/SIGNPATH_APPLICATION.md)。

@@ -271,6 +271,26 @@ fn redact_sensitive_log_text(message: &str) -> String {
         .join("\n")
 }
 
+fn diagnostic_path(path: &str) -> String {
+    let mut sanitized = path.to_string();
+    for (name, value) in [
+        ("%LOCALAPPDATA%", std::env::var_os("LOCALAPPDATA")),
+        ("%USERPROFILE%", std::env::var_os("USERPROFILE")),
+    ] {
+        if let Some(value) = value {
+            let value = value.to_string_lossy();
+            if sanitized
+                .to_ascii_lowercase()
+                .starts_with(&value.to_ascii_lowercase())
+            {
+                sanitized.replace_range(..value.len(), name);
+                break;
+            }
+        }
+    }
+    sanitized
+}
+
 fn redact_sensitive_log_line(line: &str) -> String {
     let mut sanitized = redact_url_queries(line);
     for header in ["authorization:", "cookie:", "set-cookie:"] {
@@ -903,6 +923,106 @@ fn open_dsh(state: tauri::State<'_, AppState>) -> Result<LauncherSnapshot, Strin
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     Ok(supervisor.snapshot())
+}
+
+#[tauri::command]
+fn open_log_directory(state: tauri::State<'_, AppState>) -> Result<LauncherSnapshot, String> {
+    let log_path = runtime_manager::log_path();
+    let directory = log_path.parent().ok_or("日志路径没有父目录。")?;
+    fs::create_dir_all(directory)
+        .map_err(|error| format!("无法创建日志目录 {}：{error}", directory.display()))?;
+    open::that(directory).map_err(|error| format!("无法打开日志目录：{error}"))?;
+    shared_log(
+        &state.supervisor,
+        "info",
+        "已在文件资源管理器中打开启动器日志目录。".to_string(),
+    );
+    let supervisor = state
+        .supervisor
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    Ok(supervisor.snapshot())
+}
+
+#[tauri::command]
+fn get_diagnostic_summary(state: tauri::State<'_, AppState>) -> String {
+    let supervisor = state
+        .supervisor
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let snapshot = supervisor.snapshot();
+    let preflight = &snapshot.version_manager.preflight;
+    let runtime_version = snapshot.runtime.dsh_version.as_deref().unwrap_or("未安装");
+    let node_version = snapshot.runtime.node_version.as_deref().unwrap_or("未知");
+    let last_error = snapshot
+        .last_error
+        .as_deref()
+        .map(|error| diagnostic_path(&redact_sensitive_log_text(error)))
+        .unwrap_or_else(|| "无".to_string());
+    format!(
+        "DSH Launcher 诊断摘要\n\
+         Launcher: {}\n\
+         状态: {:?}\n\
+         Windows: {}\n\
+         架构: {}\n\
+         WebView2: {}\n\
+         DSH: {}\n\
+         Node: {}\n\
+         Runtime: {}\n\
+         缓存: {}\n\
+         DSH_HOME: {}\n\
+         工作区: {}\n\
+         最近错误: {}",
+        env!("CARGO_PKG_VERSION"),
+        snapshot.phase,
+        preflight.windows_version.as_deref().unwrap_or("未知"),
+        preflight.architecture,
+        preflight.webview2_version.as_deref().unwrap_or("未检测到"),
+        runtime_version,
+        node_version,
+        diagnostic_path(&preflight.runtime_root),
+        diagnostic_path(&preflight.cache_root),
+        diagnostic_path(&snapshot.runtime.dsh_home),
+        diagnostic_path(&snapshot.runtime.workspace),
+        last_error,
+    )
+}
+
+#[tauri::command]
+fn save_first_run_paths(
+    runtime_root: String,
+    cache_root: String,
+    dsh_home: String,
+    workspace: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    {
+        let supervisor = state
+            .supervisor
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if supervisor.version_manager.snapshot.busy {
+            return Err("Runtime 操作进行中，暂时不能修改路径。".to_string());
+        }
+        if !supervisor.version_manager.snapshot.first_run_required
+            || !supervisor
+                .version_manager
+                .snapshot
+                .installed_versions
+                .is_empty()
+        {
+            return Err(
+                "为避免让现有 Runtime 或用户数据失联，路径只能在首次安装前修改。".to_string(),
+            );
+        }
+    }
+    runtime_manager::save_onboarding_paths(&runtime_root, &cache_root, &dsh_home, &workspace)?;
+    shared_log(
+        &state.supervisor,
+        "info",
+        "首次安装路径已保存；重启启动器后生效。".to_string(),
+    );
+    Ok(())
 }
 
 fn ensure_runtime_change_allowed(supervisor: &Supervisor) -> Result<(), String> {
@@ -1892,6 +2012,9 @@ pub fn run() {
             start_dsh,
             stop_dsh,
             open_dsh,
+            open_log_directory,
+            get_diagnostic_summary,
+            save_first_run_paths,
             check_runtime_versions,
             set_runtime_channel,
             install_runtime_channel,
@@ -1908,6 +2031,18 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_updater_config_initializes_without_enabling_updates() {
+        // The plugin deserializes this even when update UI is disabled. Missing
+        // configuration causes startup to panic before the launcher can log.
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let updater: tauri_plugin_updater::Config =
+            serde_json::from_value(config["plugins"]["updater"].clone()).unwrap();
+        assert!(updater.endpoints.is_empty());
+        assert!(updater.pubkey.is_empty());
+    }
 
     fn version_manager_for_test(root: &Path, cache: &Path) -> VersionManagerState {
         VersionManagerState {
@@ -1926,9 +2061,11 @@ mod tests {
                 last_checked_ms: None,
                 preflight: runtime_manager::PreflightInfo {
                     windows_supported: true,
+                    windows_version: Some("Windows 11 · build 26100".to_string()),
                     architecture: "x86_64".to_string(),
                     architecture_supported: true,
                     webview2_available: true,
+                    webview2_version: Some("125.0.2535.51".to_string()),
                     free_bytes: None,
                     enough_disk_space: true,
                     runtime_root: root.display().to_string(),
@@ -2301,10 +2438,12 @@ mod tests {
                     .join(format!("private-install-{}", now_ms()))
             });
         let dsh_home = root.join("production-home");
-        let workspace = PathBuf::from(runtime_manager::LEGACY_WORKSPACE);
+        let workspace = std::env::var_os("DSH_LAUNCHER_TEST_WORKSPACE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| root.join("workspace"));
         fs::create_dir_all(root.join("versions")).expect("versions directory");
         fs::create_dir_all(&dsh_home).expect("production DSH_HOME");
-        assert!(workspace.is_dir(), "real workspace is required");
+        fs::create_dir_all(&workspace).expect("isolated workspace");
 
         let bridge_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("resources")

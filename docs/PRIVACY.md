@@ -1,6 +1,6 @@
 # DSH Launcher 隐私说明
 
-> 更新日期：2026-09-01
+> 更新日期：2026-09-04
 
 DSH Launcher 是非官方的本地 Windows 启动器。启动器本身不提供云端账户、遥测或行为分析服务，
 也不会读取、上传或代管 DeepSeek Harness（DSH）的 API Key、凭据和完整会话内容。
@@ -14,14 +14,16 @@ DSH Launcher 是非官方的本地 Windows 启动器。启动器本身不提供�
 - Runtime 更新通道、签名 manifest sequence、下载进度和活动/上一版本指针；
 - DSH 子进程的 stdout/stderr，以及启动器自身的状态和错误信息。
 
-生产 `DSH_HOME` 默认位于 `D:\Caches\deepseek-harness\home`，其中可能包含设置、会话、附件、
-Workspace 信息和凭据引用。启动器只在用户明确确认应用 Runtime 更新时，将它复制到本机备份目录；
-不会读取文件正文来生成日志，也不会把备份上传到网络。
+全新安装的生产 `DSH_HOME` 默认位于当前用户的 `%LOCALAPPDATA%\DeepSeek Harness\home`，其中可能包含设置、
+会话、附件、Workspace 信息和凭据引用。早期版本已在 `D:\Caches\deepseek-harness\home` 留有真实目录时，
+启动器继续沿用它，不自动迁移或删除数据。启动器只在用户明确确认应用 Runtime 更新时，将 DSH_HOME 复制到
+本机备份目录；不会读取文件正文来生成日志，也不会把备份上传到网络。
 
 ## 本地日志与脱敏
 
-启动器日志默认位于 `D:\Caches\dsh-launcher\logs`；D 盘不可用时回退到当前用户的
-`LOCALAPPDATA`。单个日志达到 5 MiB 后轮转，只保留当前日志和一份上一日志。
+全新安装的启动器日志默认位于 `%LOCALAPPDATA%\DSH Launcher\cache\logs`。只有检测到早期版本的真实
+`D:\Tools\dsh-launcher` 安装记录且原缓存目录仍存在时，才继续使用 `D:\Caches\dsh-launcher\logs`。
+单个日志达到 5 MiB 后轮转，只保留当前日志和一份上一日志。
 
 写入内存日志或持久日志前，启动器会移除 URL 查询参数和片段，并遮盖常见的 token、API Key、
 Authorization、Cookie、密码和 secret 字段。启动时也会原子脱敏旧版留下的日志。脱敏是纵深防御，

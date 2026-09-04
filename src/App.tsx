@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import type { DshPhase, LauncherSnapshot, RuntimeChannel } from "./types";
@@ -48,10 +48,12 @@ const initialSnapshot: LauncherSnapshot = {
     message: null,
     lastCheckedMs: null,
     preflight: {
-      windowsSupported: true,
+      windowsSupported: false,
+      windowsVersion: null,
       architecture: "x86_64",
       architectureSupported: true,
-      webview2Available: true,
+      webview2Available: false,
+      webview2Version: null,
       freeBytes: null,
       enoughDiskSpace: false,
       runtimeRoot: "",
@@ -85,6 +87,22 @@ function formatBytes(bytes: number | null) {
   return `${(bytes / 1024 ** 3).toFixed(1)} GB 可用`;
 }
 
+async function copyText(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) throw new Error("系统剪贴板不可用");
+}
+
 export default function App() {
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [busy, setBusy] = useState(false);
@@ -93,11 +111,21 @@ export default function App() {
   const [launcherUpdateBusy, setLauncherUpdateBusy] = useState(false);
   const [launcherUpdateProgress, setLauncherUpdateProgress] = useState<string | null>(null);
   const [launcherVersion, setLauncherVersion] = useState<string | null>(null);
+  const [onboardingActive, setOnboardingActive] = useState(false);
+  const [diagnosticNotice, setDiagnosticNotice] = useState<string | null>(null);
+  const [pathDraft, setPathDraft] = useState({
+    runtimeRoot: "",
+    cacheRoot: "",
+    dshHome: "",
+    workspace: "",
+  });
+  const pathsInitialized = useRef(false);
 
   const refresh = useCallback(async () => {
     try {
       const next = await invoke<LauncherSnapshot>("get_launcher_snapshot");
       setSnapshot(next);
+      if (next.versionManager.firstRunRequired) setOnboardingActive(true);
     } catch (error) {
       setRequestError(String(error));
     }
@@ -114,6 +142,17 @@ export default function App() {
       .then(setLauncherVersion)
       .catch(() => setLauncherVersion(null));
   }, []);
+
+  useEffect(() => {
+    if (pathsInitialized.current || !snapshot.versionManager.preflight.runtimeRoot) return;
+    setPathDraft({
+      runtimeRoot: snapshot.versionManager.preflight.runtimeRoot,
+      cacheRoot: snapshot.versionManager.preflight.cacheRoot,
+      dshHome: snapshot.runtime.dshHome,
+      workspace: snapshot.runtime.workspace,
+    });
+    pathsInitialized.current = true;
+  }, [snapshot]);
 
   const call = useCallback(
     async (command: string, arguments_?: Record<string, unknown>) => {
@@ -156,6 +195,7 @@ export default function App() {
   );
 
   const installSelectedChannel = useCallback(async () => {
+    if (snapshot.versionManager.firstRunRequired) setOnboardingActive(true);
     const channel = snapshot.versionManager.channel;
     if (
       channel === "alpha" &&
@@ -166,7 +206,32 @@ export default function App() {
       return;
     }
     await call("install_runtime_channel", { channel });
-  }, [call, snapshot.versionManager.channel]);
+  }, [call, snapshot.versionManager.channel, snapshot.versionManager.firstRunRequired]);
+
+  const saveFirstRunPaths = useCallback(async () => {
+    if (!window.confirm("保存这些路径并重启启动器？目前不会移动或删除任何已有文件。")) return;
+    setBusy(true);
+    setRequestError(null);
+    try {
+      await invoke<void>("save_first_run_paths", pathDraft);
+      const { relaunch } = await import("@tauri-apps/plugin-process");
+      await relaunch();
+    } catch (error) {
+      setRequestError(String(error));
+      setBusy(false);
+    }
+  }, [pathDraft]);
+
+  const copyDiagnostics = useCallback(async () => {
+    setDiagnosticNotice(null);
+    try {
+      const summary = await invoke<string>("get_diagnostic_summary");
+      await copyText(summary);
+      setDiagnosticNotice("诊断摘要已复制；路径中的用户目录已替换为环境变量。");
+    } catch (error) {
+      setRequestError(`无法复制诊断摘要：${String(error)}`);
+    }
+  }, []);
 
   const switchVersion = useCallback(
     async (id: string, version: string) => {
@@ -274,6 +339,13 @@ export default function App() {
     snapshot.versionManager.preflight.architectureSupported &&
     snapshot.versionManager.preflight.webview2Available &&
     snapshot.versionManager.preflight.enoughDiskSpace;
+  const setupStep =
+    snapshot.versionManager.busy && snapshot.versionManager.operation === "install"
+      ? 2
+      : snapshot.runtime.installed
+        ? 3
+        : 1;
+  const showOnboarding = onboardingActive && (snapshot.versionManager.firstRunRequired || setupStep === 3);
 
   const statusDetail = useMemo(() => {
     if (snapshot.phase === "externalServiceDetected") {
@@ -305,71 +377,147 @@ export default function App() {
         <div className="topbar-note">关闭窗口将隐藏到系统托盘</div>
       </header>
 
-      {snapshot.versionManager.firstRunRequired && (
+      {showOnboarding && (
         <section className="panel setup-wizard" aria-labelledby="setup-title">
           <div className="wizard-copy">
-            <span className="eyebrow">首次安装 · 1 / 3</span>
-            <h2 id="setup-title">准备私有 DSH Runtime</h2>
+            <span className="eyebrow">首次安装 · {setupStep} / 3</span>
+            <h2 id="setup-title">
+              {setupStep === 1
+                ? "检查环境并选择安装位置"
+                : setupStep === 2
+                  ? "下载、校验并安装 Runtime"
+                  : snapshot.phase === "running"
+                    ? "DSH 已准备就绪"
+                    : "启动 DSH 完成设置"}
+            </h2>
             <p>
-              启动器会下载经过 SHA-256 校验的便携 Node.js，在旁路目录安装 DSH，并使用隔离的
-              DSH_HOME 完成启动与真正停止测试。不会修改系统 PATH，也不会读取凭据。
+              {setupStep === 1
+                ? "先确认系统环境与数据目录。路径可在首次安装前修改，保存后重启生效。"
+                : setupStep === 2
+                  ? "正在使用官方来源下载依赖，并执行摘要校验、原生模块检查和隔离启停测试。"
+                  : snapshot.phase === "running"
+                    ? "Runtime 已安装且 DSH 健康检查通过，可以打开 Web 界面开始使用。"
+                    : "Runtime 已通过验证。启动一次 DSH 并等待健康检查通过，即完成首次设置。"}
             </p>
           </div>
-          <div className="preflight-grid">
-            <span className={snapshot.versionManager.preflight.windowsSupported ? "check-ok" : "check-bad"}>
-              Windows 10/11
-            </span>
-            <span
-              className={
-                snapshot.versionManager.preflight.architectureSupported ? "check-ok" : "check-bad"
-              }
-            >
-              {snapshot.versionManager.preflight.architecture}
-            </span>
-            <span className={snapshot.versionManager.preflight.webview2Available ? "check-ok" : "check-bad"}>
-              WebView2
-            </span>
-            <span className={snapshot.versionManager.preflight.enoughDiskSpace ? "check-ok" : "check-bad"}>
-              {formatBytes(snapshot.versionManager.preflight.freeBytes)}
-            </span>
-          </div>
-          <div className="wizard-paths">
-            <span>Runtime</span>
-            <code>{snapshot.versionManager.preflight.runtimeRoot}</code>
-            <span>缓存</span>
-            <code>{snapshot.versionManager.preflight.cacheRoot}</code>
-          </div>
-          <div className="channel-picker" aria-label="版本通道">
-            <button
-              className={snapshot.versionManager.channel === "recommended" ? "channel-active" : ""}
-              disabled={runtimeLocked}
-              onClick={() => void chooseChannel("recommended")}
-            >
-              <strong>推荐版</strong>
-              <span>npm latest · {snapshot.versionManager.recommendedVersion ?? "待查询"}</span>
-            </button>
-            <button
-              className={snapshot.versionManager.channel === "alpha" ? "channel-active" : ""}
-              disabled={runtimeLocked}
-              onClick={() => void chooseChannel("alpha")}
-            >
-              <strong>Alpha 预览版</strong>
-              <span>需主动选择 · {snapshot.versionManager.alphaVersion ?? "暂无"}</span>
-            </button>
-          </div>
-          <button
-            className="button button-primary wizard-install"
-            disabled={!preflightReady || runtimeLocked || !selectedTarget}
-            onClick={() => void installSelectedChannel()}
-          >
-            安装并验证 {selectedTarget ?? "所选版本"}
-          </button>
-          {snapshot.versionManager.busy && (
+
+          {setupStep === 1 && (
+            <>
+              <div className="preflight-grid">
+                <span
+                  className={snapshot.versionManager.preflight.windowsSupported ? "check-ok" : "check-bad"}
+                  title={snapshot.versionManager.preflight.windowsVersion ?? "无法读取 Windows 版本"}
+                >
+                  {snapshot.versionManager.preflight.windowsVersion ?? "不支持的操作系统"}
+                </span>
+                <span
+                  className={snapshot.versionManager.preflight.architectureSupported ? "check-ok" : "check-bad"}
+                >
+                  {snapshot.versionManager.preflight.architecture}
+                </span>
+                <span
+                  className={snapshot.versionManager.preflight.webview2Available ? "check-ok" : "check-bad"}
+                >
+                  {snapshot.versionManager.preflight.webview2Version
+                    ? `WebView2 ${snapshot.versionManager.preflight.webview2Version}`
+                    : "缺少 WebView2"}
+                </span>
+                <span className={snapshot.versionManager.preflight.enoughDiskSpace ? "check-ok" : "check-bad"}>
+                  {formatBytes(snapshot.versionManager.preflight.freeBytes)}
+                </span>
+              </div>
+              <details className="path-settings">
+                <summary>安装与数据目录</summary>
+                <div className="path-form">
+                  {(
+                    [
+                      ["runtimeRoot", "Runtime 目录"],
+                      ["cacheRoot", "缓存目录"],
+                      ["dshHome", "DSH_HOME"],
+                      ["workspace", "工作区"],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <label key={key}>
+                      <span>{label}</span>
+                      <input
+                        value={pathDraft[key]}
+                        disabled={busy || snapshot.versionManager.installedVersions.length > 0}
+                        onChange={(event) =>
+                          setPathDraft((current) => ({ ...current, [key]: event.target.value }))
+                        }
+                      />
+                    </label>
+                  ))}
+                </div>
+                <div className="path-settings-footer">
+                  <span>不会移动或删除已有文件；目录变更在重启后生效。</span>
+                  <button
+                    className="button button-ghost"
+                    disabled={busy || snapshot.versionManager.installedVersions.length > 0}
+                    onClick={() => void saveFirstRunPaths()}
+                  >
+                    保存并重启
+                  </button>
+                </div>
+              </details>
+              <div className="channel-picker" aria-label="版本通道">
+                <button
+                  className={snapshot.versionManager.channel === "recommended" ? "channel-active" : ""}
+                  disabled={runtimeLocked}
+                  onClick={() => void chooseChannel("recommended")}
+                >
+                  <strong>推荐版</strong>
+                  <span>npm latest · {snapshot.versionManager.recommendedVersion ?? "待查询"}</span>
+                </button>
+                <button
+                  className={snapshot.versionManager.channel === "alpha" ? "channel-active" : ""}
+                  disabled={runtimeLocked}
+                  onClick={() => void chooseChannel("alpha")}
+                >
+                  <strong>Alpha 预览版</strong>
+                  <span>需主动选择 · {snapshot.versionManager.alphaVersion ?? "暂无"}</span>
+                </button>
+              </div>
+              <button
+                className="button button-primary wizard-install"
+                disabled={!preflightReady || runtimeLocked || !selectedTarget}
+                onClick={() => void installSelectedChannel()}
+              >
+                {snapshot.lastError || requestError ? "重试安装" : "开始下载并安装"} {selectedTarget ?? "所选版本"}
+              </button>
+            </>
+          )}
+
+          {setupStep === 2 && (
             <div className="operation-progress" aria-live="polite">
               <div>
                 <span style={{ width: `${snapshot.versionManager.progress}%` }} />
               </div>
-              <p>{snapshot.versionManager.message}</p>
+              <p>{snapshot.versionManager.message ?? "正在准备安装…"}</p>
+              <small>安装失败时可直接重试；已下载且校验通过的缓存会复用。</small>
+            </div>
+          )}
+
+          {setupStep === 3 && (
+            <div className="wizard-complete-actions">
+              {snapshot.phase === "running" ? (
+                <>
+                  <button className="button button-primary" onClick={() => void call("open_dsh")}>
+                    打开 DSH 界面
+                  </button>
+                  <button className="button button-secondary" onClick={() => setOnboardingActive(false)}>
+                    完成向导
+                  </button>
+                </>
+              ) : (
+                <button
+                  className="button button-primary"
+                  disabled={!canStart || busy || isTransitioning}
+                  onClick={() => void call("start_dsh")}
+                >
+                  启动 DSH 并完成检查
+                </button>
+              )}
             </div>
           )}
         </section>
@@ -639,13 +787,24 @@ export default function App() {
       </section>
 
       <section className="panel log-panel">
-        <button className="log-toggle" onClick={() => setLogsExpanded((value) => !value)}>
-          <span>
-            <span className="eyebrow">诊断</span>
-            <strong>启动器日志</strong>
-          </span>
-          <span>{logsExpanded ? "收起" : "展开"}</span>
-        </button>
+        <div className="log-header">
+          <button className="log-toggle" onClick={() => setLogsExpanded((value) => !value)}>
+            <span>
+              <span className="eyebrow">诊断</span>
+              <strong>启动器日志</strong>
+            </span>
+            <span>{logsExpanded ? "收起" : "展开"}</span>
+          </button>
+          <div className="diagnostic-actions">
+            <button className="button button-ghost" onClick={() => void copyDiagnostics()}>
+              复制诊断摘要
+            </button>
+            <button className="button button-ghost" onClick={() => void call("open_log_directory")}>
+              打开日志目录
+            </button>
+          </div>
+        </div>
+        {diagnosticNotice ? <p className="diagnostic-notice">{diagnosticNotice}</p> : null}
         {logsExpanded && (
           <div className="log-view" aria-live="polite">
             {snapshot.logs.length === 0 ? (

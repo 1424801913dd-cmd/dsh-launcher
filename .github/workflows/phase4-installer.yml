@@ -9,6 +9,7 @@ permissions:
 jobs:
   unsigned-installer-smoke:
     runs-on: windows-latest
+    timeout-minutes: 45
     env:
       CARGO_TERM_COLOR: always
 
@@ -32,6 +33,14 @@ jobs:
           cargo fmt --manifest-path ./src-tauri/Cargo.toml --check
           cargo test --manifest-path ./src-tauri/Cargo.toml
 
+      - name: Install and verify Runtime from scratch
+        shell: pwsh
+        run: |
+          ./scripts/clean-runtime-install.ps1 `
+            -TestRoot (Join-Path $env:RUNNER_TEMP 'clean-runtime-ci') `
+            -ReportPath (Join-Path $env:RUNNER_TEMP 'clean-runtime-install.json') `
+            -IsolatedEnvironment
+
       - name: Build unsigned NSIS installer
         shell: pwsh
         run: |
@@ -50,12 +59,17 @@ jobs:
             -InstallerPath $installer.FullName `
             -TestRoot (Join-Path $env:RUNNER_TEMP 'dsh-installer-smoke') `
             -ReportPath (Join-Path $env:RUNNER_TEMP 'phase4-installer-smoke.json') `
-            -IsolatedEnvironment
+            -IsolatedEnvironment `
+            -LaunchSmoke
 
       - name: Upload installer and smoke report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: phase4-unsigned-installer-smoke
           path: |
             src-tauri/target/release/bundle/nsis/*.exe
             ${{ runner.temp }}/phase4-installer-smoke.json
+            ${{ runner.temp }}/clean-runtime-install.json
+            ${{ runner.temp }}/dsh-installer-smoke/launcher-startup.json
+            ${{ runner.temp }}/dsh-installer-smoke/launch-profile/cache/logs/launcher.log

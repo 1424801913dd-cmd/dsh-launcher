@@ -3,6 +3,9 @@
 更新时间：2026-09-01（sharp/libvips 项于 2026-09-02 完成人工复核，见下文）。本文是发布工程记录，
 不是法律意见；版本、Runtime 或品牌素材变化后必须重新复核。
 
+签名状态更新（2026-09-04）：SignPath Foundation 申请因公开采用度和独立信任信号不足而未获批准。下文关于
+SignPath Foundation Authenticode 的要求是未来获批后的发布门禁，不表示当前项目或制品已获得该签名。
+
 ## 产品身份
 
 - 产品名为 **DSH Launcher**，用于兼容 DeepSeek Harness（上游命令名为 `dsh`）。
@@ -83,6 +86,7 @@ LGPLv3 第 4 节要求显著许可说明、随附 GPL/LGPL 文本，并允许在
 - 不使用 DeepSeek 鲸形 Logo、官方截图或容易混淆的图标；
 - 明确上游仍处于 developer preview，兼容性可能发生破坏性变化；
 - 隐私说明、第三方通知和源码获取信息可从安装目录或发布页直接访问。
-- Authenticode 发布者为 `SignPath Foundation`；README、Release 和下载页保留 SignPath.io/SignPath Foundation
-  归属文案并链接 `docs/CODE_SIGNING_POLICY.md`，不得暗示该签名构成 DeepSeek 背书；
+- 如果未来获批，Authenticode 发布者必须为 `SignPath Foundation`；README、Release 和下载页保留
+  SignPath.io/SignPath Foundation 归属文案并链接 `docs/CODE_SIGNING_POLICY.md`，不得暗示该签名构成
+  DeepSeek 背书；
 - 只接受 GitHub trusted build 生成的 artifact ID，内部 EXE 和最终 NSIS 必须分两阶段签名并具有可信时间戳。

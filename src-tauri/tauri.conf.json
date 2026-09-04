@@ -28,6 +28,12 @@
       "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost"
     }
   },
+  "plugins": {
+    "updater": {
+      "endpoints": [],
+      "pubkey": ""
+    }
+  },
   "bundle": {
     "active": false,
     "icon": [
@@ -42,6 +48,7 @@
       "resources/runtime-update-config.json": "resources/runtime-update-config.json",
       "../LICENSE": "resources/DSH_LAUNCHER_LICENSE.txt",
       "../docs/PRIVACY.md": "resources/PRIVACY.md",
+      "../docs/USER_GUIDE.md": "resources/USER_GUIDE.md",
       "../docs/CODE_SIGNING_POLICY.md": "resources/CODE_SIGNING_POLICY.md",
       "../docs/RELEASE_REVIEW.md": "resources/RELEASE_REVIEW.md",
       "../docs/THIRD_PARTY_NOTICES.md": "resources/THIRD_PARTY_NOTICES.md"

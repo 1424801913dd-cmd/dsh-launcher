@@ -407,6 +407,37 @@ h2 {
   cursor: pointer;
 }
 
+.log-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-right: 20px;
+}
+
+.log-header .log-toggle {
+  flex: 1;
+}
+
+.diagnostic-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.diagnostic-actions .button {
+  min-height: 34px;
+  padding-inline: 12px;
+  font-size: 10px;
+}
+
+.diagnostic-notice {
+  margin: 0;
+  border-top: 1px solid #d8dee9;
+  padding: 9px 20px;
+  color: #087443;
+  background: #effaf4;
+  font-size: 11px;
+}
+
 .log-toggle > span:first-child {
   display: grid;
   text-align: left;
@@ -867,6 +898,77 @@ footer {
   font-size: 11px;
 }
 
+.operation-progress small {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.path-settings {
+  margin-top: 14px;
+  border: 1px solid #d8dee9;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.path-settings summary {
+  padding: 11px 13px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.path-form {
+  display: grid;
+  gap: 9px;
+  padding: 2px 13px 12px;
+}
+
+.path-form label {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.path-form input {
+  min-width: 0;
+  border: 1px solid #cfd6e1;
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--ink);
+  background: #ffffff;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 11px;
+}
+
+.path-form input:focus {
+  border-color: #8095ff;
+  outline: 3px solid rgba(77, 107, 254, 0.14);
+}
+
+.path-settings-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid #e4e7ec;
+  padding: 10px 13px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.wizard-complete-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+
 .channel-toolbar {
   display: flex;
   align-items: center;
@@ -1068,5 +1170,24 @@ footer {
 
   .secure-update-actions {
     justify-content: flex-start;
+  }
+
+  .log-header,
+  .path-settings-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .log-header {
+    padding-right: 0;
+  }
+
+  .diagnostic-actions {
+    padding: 0 20px 14px;
+  }
+
+  .path-form label {
+    grid-template-columns: 1fr;
+    gap: 4px;
   }
 }

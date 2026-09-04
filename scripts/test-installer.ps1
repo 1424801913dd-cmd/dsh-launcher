@@ -6,7 +6,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$ReportPath,
     [switch]$IsolatedEnvironment,
-    [switch]$RequireAuthenticode
+    [switch]$RequireAuthenticode,
+    [switch]$LaunchSmoke
 )
 
 $ErrorActionPreference = 'Stop'
@@ -31,13 +32,14 @@ if ($testRootPath -eq $testRootDrive -or $testRootPath.Length -le ($testRootDriv
 }
 
 $installRoot = Join-Path $testRootPath 'install'
-$preservedDataRoot = Join-Path $testRootPath 'preserved-data'
+$launchProfileRoot = Join-Path $testRootPath 'launch-profile'
+$preservedDataRoot = Join-Path $launchProfileRoot 'local-app-data\DeepSeek Harness\home'
 $sentinel = Join-Path $preservedDataRoot 'must-survive-uninstall.txt'
 $expectedVersion = (Get-Content -Raw -Encoding UTF8 (Join-Path $projectRoot 'package.json') | ConvertFrom-Json).version
 New-Item -ItemType Directory -Force -Path $preservedDataRoot | Out-Null
 [System.IO.File]::WriteAllText($sentinel, 'preserve', [System.Text.UTF8Encoding]::new($false))
 
-$installerProcess = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$installRoot") -PassThru -Wait
+$installerProcess = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$installRoot") -PassThru -Wait -WindowStyle Hidden
 if ($installerProcess.ExitCode -ne 0) {
     throw "Installer exited with code $($installerProcess.ExitCode)."
 }
@@ -53,7 +55,8 @@ foreach ($requiredFile in @(
     (Join-Path $installRoot 'resources\DSH_LAUNCHER_LICENSE.txt'),
     (Join-Path $installRoot 'resources\PRIVACY.md'),
     (Join-Path $installRoot 'resources\RELEASE_REVIEW.md'),
-    (Join-Path $installRoot 'resources\THIRD_PARTY_NOTICES.md')
+    (Join-Path $installRoot 'resources\THIRD_PARTY_NOTICES.md'),
+    (Join-Path $installRoot 'resources\USER_GUIDE.md')
 )) {
     if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
         throw "Installed file missing: $requiredFile"
@@ -68,7 +71,17 @@ if ($RequireAuthenticode) {
     & (Join-Path $PSScriptRoot 'verify-authenticode.ps1') -Path $installedExecutable -RequireTimestamp
 }
 
-$uninstallerProcess = Start-Process -FilePath $uninstaller -ArgumentList '/S' -PassThru -Wait
+$launchSmokePassed = $false
+$launchLogPath = Join-Path $launchProfileRoot 'cache\logs\launcher.log'
+if ($LaunchSmoke) {
+    & (Join-Path $PSScriptRoot 'test-launcher-startup.ps1') `
+        -ExecutablePath $installedExecutable `
+        -TestRoot $launchProfileRoot `
+        -ReportPath (Join-Path $testRootPath 'launcher-startup.json')
+    $launchSmokePassed = $true
+}
+
+$uninstallerProcess = Start-Process -FilePath $uninstaller -ArgumentList '/S' -PassThru -Wait -WindowStyle Hidden
 if ($uninstallerProcess.ExitCode -ne 0) {
     throw "Uninstaller exited with code $($uninstallerProcess.ExitCode)."
 }
@@ -103,6 +116,9 @@ $report = [ordered]@{
     dataSentinelPreserved = $true
     shortcutRemoved = $true
     authenticodeRequired = [bool]$RequireAuthenticode
+    launchSmokeRequested = [bool]$LaunchSmoke
+    launchSmokePassed = if ($LaunchSmoke) { $launchSmokePassed } else { $null }
+    isolatedLaunchLog = if ($LaunchSmoke) { $launchLogPath } else { $null }
 } | ConvertTo-Json -Depth 4
 [System.IO.File]::WriteAllText($reportPathValue, $report + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
 Write-Output "Installer smoke report: $reportPathValue"

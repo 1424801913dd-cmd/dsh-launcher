@@ -34,12 +34,24 @@ if ($RunProjectChecks) {
     }
 }
 
-foreach ($relativePath in @('LICENSE', 'README.md', 'HANDOFF.md', 'docs\CODE_SIGNING_POLICY.md', 'docs\LGPL_REVIEW.md', 'docs\PRIVACY.md', 'docs\RELEASE_REVIEW.md', 'docs\RELEASE_TEMPLATE.md', 'docs\RUNTIME_LICENSES.md', 'docs\SIGNPATH_APPLICATION.md', 'docs\THIRD_PARTY_NOTICES.md')) {
+foreach ($relativePath in @('LICENSE', 'README.md', 'HANDOFF.md', 'docs\CODE_SIGNING_POLICY.md', 'docs\LGPL_REVIEW.md', 'docs\PRIVACY.md', 'docs\RELEASE_REVIEW.md', 'docs\RELEASE_TEMPLATE.md', 'docs\RUNTIME_LICENSES.md', 'docs\SIGNPATH_APPLICATION.md', 'docs\THIRD_PARTY_NOTICES.md', 'docs\USER_GUIDE.md', 'docs\WINDOWS_ACCEPTANCE.md')) {
     $path = Join-Path $ProjectRoot $relativePath
     if (Test-Path -LiteralPath $path -PathType Leaf) {
         Add-QualityResult -Check "document:$relativePath" -Status 'PASS' -Details 'Present.'
     } else {
         Add-QualityResult -Check "document:$relativePath" -Status 'FAIL' -Details 'Missing required release document.'
+    }
+}
+
+foreach ($relativePath in @('scripts\clean-runtime-install.ps1', 'scripts\collect-windows-acceptance.ps1', 'scripts\test-installer.ps1', 'scripts\test-launcher-startup.ps1')) {
+    $path = Join-Path $ProjectRoot $relativePath
+    $tokens = $null
+    $parseErrors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$parseErrors) | Out-Null
+    if ($parseErrors.Count -eq 0) {
+        Add-QualityResult -Check "powershell-syntax:$relativePath" -Status 'PASS' -Details 'Parsed without errors.'
+    } else {
+        Add-QualityResult -Check "powershell-syntax:$relativePath" -Status 'FAIL' -Details ($parseErrors.Message -join '; ')
     }
 }
 

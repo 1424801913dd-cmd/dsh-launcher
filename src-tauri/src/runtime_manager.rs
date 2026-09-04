@@ -16,13 +16,22 @@ use std::{
 use zip::ZipArchive;
 
 #[cfg(windows)]
-use std::os::windows::{ffi::OsStrExt, process::CommandExt};
+use std::os::windows::{
+    ffi::{OsStrExt, OsStringExt},
+    process::CommandExt,
+};
 #[cfg(windows)]
 use windows_sys::Win32::{
     Storage::FileSystem::{
         GetDiskFreeSpaceExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
     },
-    System::Threading::CREATE_NO_WINDOW,
+    System::{
+        Registry::{
+            HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RRF_SUBKEY_WOW6432KEY,
+            RRF_SUBKEY_WOW6464KEY, RegGetValueW,
+        },
+        Threading::CREATE_NO_WINDOW,
+    },
 };
 
 const REGISTRY_PACKAGE_URL: &str = "https://registry.npmjs.org/@deepseek-ai%2fdsh";
@@ -40,11 +49,30 @@ const MAX_NODE_EXTRACTED_BYTES: u64 = 1024 * 1024 * 1024;
 static RUNTIME_ROOT: OnceLock<PathBuf> = OnceLock::new();
 static CACHE_ROOT: OnceLock<PathBuf> = OnceLock::new();
 
+const LEGACY_RUNTIME_ROOT: &str = r"D:\Tools\dsh-launcher";
+const LEGACY_CACHE_ROOT: &str = r"D:\Caches\dsh-launcher";
 pub const LEGACY_NODE: &str = r"D:\Tools\node-v24.19.0-win-x64\node.exe";
 pub const LEGACY_DSH_ENTRY: &str =
     r"D:\Tools\dsh-runtime-0.1.1-rc.2\node_modules\@deepseek-ai\dsh\lib\bin.js";
 pub const LEGACY_DSH_HOME: &str = r"D:\Caches\deepseek-harness\home";
 pub const LEGACY_WORKSPACE: &str = r"D:\Bian_CHENG\dsmax";
+const WEBVIEW2_CLIENT_KEY: &str =
+    r"SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct LauncherSettings {
+    #[serde(default = "settings_schema_version")]
+    schema_version: u32,
+    runtime_root: Option<String>,
+    cache_root: Option<String>,
+    dsh_home: Option<String>,
+    workspace: Option<String>,
+}
+
+fn settings_schema_version() -> u32 {
+    1
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -83,9 +111,11 @@ pub struct InstalledRuntime {
 #[serde(rename_all = "camelCase")]
 pub struct PreflightInfo {
     pub windows_supported: bool,
+    pub windows_version: Option<String>,
     pub architecture: String,
     pub architecture_supported: bool,
     pub webview2_available: bool,
+    pub webview2_version: Option<String>,
     pub free_bytes: Option<u64>,
     pub enough_disk_space: bool,
     pub runtime_root: String,
@@ -204,16 +234,15 @@ pub(crate) fn now_ms() -> u64 {
 pub fn runtime_root() -> PathBuf {
     RUNTIME_ROOT
         .get_or_init(|| {
-            if let Some(configured) = env::var_os("DSH_LAUNCHER_RUNTIME_ROOT") {
-                return PathBuf::from(configured);
-            }
-            if Path::new(r"D:\").is_dir() {
-                let preferred = PathBuf::from(r"D:\Tools\dsh-launcher");
-                if writable_directory(&preferred) {
-                    return preferred;
-                }
-            }
-            local_app_data().join("DSH Launcher").join("runtime")
+            let legacy = Path::new(LEGACY_RUNTIME_ROOT);
+            select_default_root(
+                env::var_os("DSH_LAUNCHER_RUNTIME_ROOT")
+                    .map(PathBuf::from)
+                    .or_else(|| configured_path(|settings| settings.runtime_root)),
+                local_app_data().join("DSH Launcher").join("runtime"),
+                legacy,
+                legacy_runtime_install_exists(legacy),
+            )
         })
         .clone()
 }
@@ -221,29 +250,41 @@ pub fn runtime_root() -> PathBuf {
 pub fn cache_root() -> PathBuf {
     CACHE_ROOT
         .get_or_init(|| {
-            if let Some(configured) = env::var_os("DSH_LAUNCHER_CACHE_ROOT") {
-                return PathBuf::from(configured);
-            }
-            if Path::new(r"D:\").is_dir() {
-                let preferred = PathBuf::from(r"D:\Caches\dsh-launcher");
-                if writable_directory(&preferred) {
-                    return preferred;
-                }
-            }
-            local_app_data().join("DSH Launcher").join("cache")
+            let legacy = Path::new(LEGACY_CACHE_ROOT);
+            let legacy_runtime_selected = runtime_root() == Path::new(LEGACY_RUNTIME_ROOT);
+            select_default_root(
+                env::var_os("DSH_LAUNCHER_CACHE_ROOT")
+                    .map(PathBuf::from)
+                    .or_else(|| configured_path(|settings| settings.cache_root)),
+                local_app_data().join("DSH Launcher").join("cache"),
+                legacy,
+                legacy_runtime_selected && legacy.is_dir(),
+            )
         })
         .clone()
 }
 
 pub fn default_dsh_home() -> PathBuf {
+    if let Some(configured) = env::var_os("DSH_LAUNCHER_DSH_HOME") {
+        return PathBuf::from(configured);
+    }
+    if let Some(configured) = configured_path(|settings| settings.dsh_home) {
+        return configured;
+    }
     let legacy = PathBuf::from(LEGACY_DSH_HOME);
-    if Path::new(r"D:\").is_dir() && writable_directory(&legacy) {
+    if legacy.is_dir() {
         return legacy;
     }
     local_app_data().join("DeepSeek Harness").join("home")
 }
 
 pub fn default_workspace() -> PathBuf {
+    if let Some(configured) = env::var_os("DSH_LAUNCHER_WORKSPACE") {
+        return PathBuf::from(configured);
+    }
+    if let Some(configured) = configured_path(|settings| settings.workspace) {
+        return configured;
+    }
     let legacy = PathBuf::from(LEGACY_WORKSPACE);
     if legacy.is_dir() {
         return legacy;
@@ -258,27 +299,119 @@ pub fn default_workspace() -> PathBuf {
 fn local_app_data() -> PathBuf {
     env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(r"C:\Users\Public\AppData\Local"))
+        .or_else(|| {
+            env::var_os("USERPROFILE")
+                .map(PathBuf::from)
+                .map(|profile| profile.join("AppData").join("Local"))
+        })
+        .unwrap_or_else(env::temp_dir)
 }
 
-fn writable_directory(path: &Path) -> bool {
-    if fs::create_dir_all(path).is_err() {
-        return false;
+pub fn launcher_settings_path() -> PathBuf {
+    if let Some(configured) = env::var_os("DSH_LAUNCHER_SETTINGS_PATH") {
+        return PathBuf::from(configured);
     }
-    let probe = path.join(format!(
-        ".dsh-launcher-write-test-{}-{}",
-        std::process::id(),
-        now_ms()
-    ));
-    match OpenOptions::new().write(true).create_new(true).open(&probe) {
-        Ok(mut file) => {
-            let wrote = file.write_all(b"ok").and_then(|_| file.sync_all()).is_ok();
-            drop(file);
-            let removed = fs::remove_file(&probe).is_ok();
-            wrote && removed
+    local_app_data().join("DSH Launcher").join("settings.json")
+}
+
+fn configured_path(select: impl FnOnce(LauncherSettings) -> Option<String>) -> Option<PathBuf> {
+    load_launcher_settings(&launcher_settings_path())
+        .ok()
+        .and_then(select)
+        .map(PathBuf::from)
+}
+
+fn load_launcher_settings(path: &Path) -> Result<LauncherSettings, String> {
+    if !path.is_file() {
+        return Ok(LauncherSettings {
+            schema_version: 1,
+            ..LauncherSettings::default()
+        });
+    }
+    let settings: LauncherSettings = serde_json::from_slice(
+        &fs::read(path)
+            .map_err(|error| format!("无法读取启动器设置 {}：{error}", path.display()))?,
+    )
+    .map_err(|error| format!("启动器设置格式无效：{error}"))?;
+    if settings.schema_version != 1 {
+        return Err(format!(
+            "不支持的启动器设置版本：{}",
+            settings.schema_version
+        ));
+    }
+    Ok(settings)
+}
+
+fn validate_user_directory(label: &str, value: &str) -> Result<PathBuf, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{label} 不能为空。"));
+    }
+    let path = PathBuf::from(trimmed);
+    if !path.is_absolute() {
+        return Err(format!("{label} 必须是绝对路径。"));
+    }
+    if path.parent().is_none() {
+        return Err(format!("{label} 不能直接使用磁盘根目录。"));
+    }
+    if path.is_file() {
+        return Err(format!("{label} 指向了文件而不是目录。"));
+    }
+    Ok(path)
+}
+
+pub fn save_onboarding_paths(
+    runtime_root: &str,
+    cache_root: &str,
+    dsh_home: &str,
+    workspace: &str,
+) -> Result<(), String> {
+    let runtime_root = validate_user_directory("Runtime 目录", runtime_root)?;
+    let cache_root = validate_user_directory("缓存目录", cache_root)?;
+    let dsh_home = validate_user_directory("DSH_HOME", dsh_home)?;
+    let workspace = validate_user_directory("工作区", workspace)?;
+    if runtime_root == cache_root {
+        return Err("Runtime 目录与缓存目录不能相同。".to_string());
+    }
+    for directory in [&runtime_root, &cache_root, &dsh_home, &workspace] {
+        fs::create_dir_all(directory)
+            .map_err(|error| format!("无法创建目录 {}：{error}", directory.display()))?;
+    }
+    let settings = LauncherSettings {
+        schema_version: 1,
+        runtime_root: Some(runtime_root.display().to_string()),
+        cache_root: Some(cache_root.display().to_string()),
+        dsh_home: Some(dsh_home.display().to_string()),
+        workspace: Some(workspace.display().to_string()),
+    };
+    atomic_write_json(&launcher_settings_path(), &settings)
+}
+
+fn select_default_root(
+    configured: Option<PathBuf>,
+    local_default: PathBuf,
+    legacy: &Path,
+    legacy_install_exists: bool,
+) -> PathBuf {
+    configured.unwrap_or_else(|| {
+        if legacy_install_exists {
+            legacy.to_path_buf()
+        } else {
+            local_default
         }
-        Err(_) => false,
+    })
+}
+
+fn legacy_runtime_install_exists(root: &Path) -> bool {
+    if root.join("active.json").is_file() || root.join("previous.json").is_file() {
+        return true;
     }
+    let Ok(entries) = fs::read_dir(root.join("versions")) else {
+        return false;
+    };
+    entries
+        .filter_map(Result::ok)
+        .any(|entry| entry.path().join("runtime.json").is_file())
 }
 
 pub fn log_path() -> PathBuf {
@@ -286,6 +419,7 @@ pub fn log_path() -> PathBuf {
 }
 
 pub fn initialize() -> Result<(VersionManagerState, Option<RuntimeRecord>), String> {
+    load_launcher_settings(&launcher_settings_path())?;
     let root = runtime_root();
     let cache = cache_root();
     let dsh_home = default_dsh_home();
@@ -426,7 +560,7 @@ pub fn check_versions() -> Result<(String, Option<String>), String> {
         .get(REGISTRY_PACKAGE_URL)
         .send()
         .and_then(reqwest::blocking::Response::error_for_status)
-        .map_err(|error| format!("无法查询 npm dist-tags：{error}"))?
+        .map_err(|error| network_error_message("查询 npm 版本", &error))?
         .json()
         .map_err(|error| format!("npm dist-tags 响应无法解析：{error}"))?;
     validate_version(&document.dist_tags.latest)?;
@@ -686,7 +820,7 @@ fn fetch_manifest(version: &str) -> Result<PackageManifest, String> {
         .get(format!("{REGISTRY_PACKAGE_URL}/{version}"))
         .send()
         .and_then(reqwest::blocking::Response::error_for_status)
-        .map_err(|error| format!("无法读取 DSH {version} manifest：{error}"))?
+        .map_err(|error| network_error_message(&format!("读取 DSH {version} manifest"), &error))?
         .json()
         .map_err(|error| format!("DSH {version} manifest 无法解析：{error}"))?;
     if !manifest.dist.integrity.starts_with("sha512-") {
@@ -702,6 +836,21 @@ fn http_client() -> Result<Client, String> {
         .user_agent(concat!("dsh-launcher/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|error| format!("无法初始化 HTTPS 客户端：{error}"))
+}
+
+fn network_error_message(action: &str, error: &reqwest::Error) -> String {
+    let cause = if error.is_timeout() {
+        "连接超时"
+    } else if error.is_connect() {
+        "无法连接服务器"
+    } else if error.is_status() {
+        "服务器返回错误状态"
+    } else {
+        "网络请求失败"
+    };
+    format!(
+        "{action}失败：{cause}。请检查网络、代理或防火墙后重试；已安装 Runtime 不受影响。技术信息：{error}"
+    )
 }
 
 fn recipe_for(version: &str, integrity: &str) -> Result<CompatibilityRecipe, String> {
@@ -834,7 +983,7 @@ fn download_file(url: &str, destination: &Path, maximum_bytes: u64) -> Result<()
         .get(url)
         .send()
         .and_then(reqwest::blocking::Response::error_for_status)
-        .map_err(|error| format!("下载失败 {url}：{error}"))?;
+        .map_err(|error| network_error_message("下载 Node.js", &error))?;
     if response
         .content_length()
         .is_some_and(|length| length > maximum_bytes)
@@ -957,7 +1106,13 @@ fn run_npm_install(
         arguments.push("--legacy-peer-deps".to_string());
     }
     let argument_refs: Vec<&str> = arguments.iter().map(String::as_str).collect();
-    run_output(node_path, &argument_refs, Some(staging), None).map(|_| ())
+    run_output(node_path, &argument_refs, Some(staging), None)
+        .map(|_| ())
+        .map_err(|error| {
+            format!(
+                "npm 安装未完成。请确认可以访问 registry.npmjs.org、代理设置正确且磁盘空间充足，然后点击重试。技术信息：{error}"
+            )
+        })
 }
 
 pub(crate) fn validate_installation(
@@ -1078,17 +1233,129 @@ fn run_output(
 }
 
 fn preflight(root: &Path, cache: &Path) -> PreflightInfo {
+    let (windows_supported, windows_version) = windows_preflight();
+    let webview2_version = detect_webview2_version();
     let free_bytes = disk_free_bytes(root);
     PreflightInfo {
-        windows_supported: cfg!(windows),
+        windows_supported,
+        windows_version,
         architecture: env::consts::ARCH.to_string(),
         architecture_supported: cfg!(target_arch = "x86_64"),
-        webview2_available: true,
+        webview2_available: webview2_version.is_some(),
+        webview2_version,
         enough_disk_space: free_bytes.is_some_and(|bytes| bytes >= MIN_FREE_BYTES),
         free_bytes,
         runtime_root: root.display().to_string(),
         cache_root: cache.display().to_string(),
     }
+}
+
+fn classify_windows_version(major: u32, minor: u32, build: u32, is_server: bool) -> (bool, String) {
+    let product = if is_server {
+        "Windows Server".to_string()
+    } else if major == 10 && build >= 22_000 {
+        "Windows 11".to_string()
+    } else if major == 10 && build >= 10_240 {
+        "Windows 10".to_string()
+    } else {
+        format!("Windows {major}.{minor}")
+    };
+    let supported = !is_server && (major > 10 || (major == 10 && build >= 10_240));
+    (supported, format!("{product} · build {build}"))
+}
+
+#[cfg(windows)]
+fn windows_preflight() -> (bool, Option<String>) {
+    let version = windows_version::OsVersion::current();
+    let (supported, label) = classify_windows_version(
+        version.major,
+        version.minor,
+        version.build,
+        windows_version::is_server(),
+    );
+    (supported, Some(label))
+}
+
+#[cfg(not(windows))]
+fn windows_preflight() -> (bool, Option<String>) {
+    (false, None)
+}
+
+fn usable_webview2_version(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && value
+            .split('.')
+            .map(str::parse::<u32>)
+            .collect::<Result<Vec<_>, _>>()
+            .is_ok_and(|parts| parts.len() >= 2 && parts.iter().any(|part| *part > 0))
+}
+
+#[cfg(windows)]
+fn read_registry_string(root: HKEY, subkey: &str, value_name: &str, view: u32) -> Option<String> {
+    let subkey: Vec<u16> = OsString::from(subkey)
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let value_name: Vec<u16> = OsString::from(value_name)
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let flags = RRF_RT_REG_SZ | view;
+    let mut bytes = 0_u32;
+    let status = unsafe {
+        RegGetValueW(
+            root,
+            subkey.as_ptr(),
+            value_name.as_ptr(),
+            flags,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut bytes,
+        )
+    };
+    if status != 0 || bytes < 2 || bytes % 2 != 0 {
+        return None;
+    }
+
+    let mut value = vec![0_u16; bytes as usize / 2];
+    let status = unsafe {
+        RegGetValueW(
+            root,
+            subkey.as_ptr(),
+            value_name.as_ptr(),
+            flags,
+            std::ptr::null_mut(),
+            value.as_mut_ptr().cast(),
+            &mut bytes,
+        )
+    };
+    if status != 0 {
+        return None;
+    }
+    while value.last() == Some(&0) {
+        value.pop();
+    }
+    Some(OsString::from_wide(&value).to_string_lossy().into_owned())
+}
+
+#[cfg(windows)]
+fn detect_webview2_version() -> Option<String> {
+    for root in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
+        for view in [RRF_SUBKEY_WOW6464KEY, RRF_SUBKEY_WOW6432KEY] {
+            if let Some(version) = read_registry_string(root, WEBVIEW2_CLIENT_KEY, "pv", view)
+                && usable_webview2_version(&version)
+            {
+                return Some(version);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(windows))]
+fn detect_webview2_version() -> Option<String> {
+    None
 }
 
 #[cfg(windows)]
@@ -1183,6 +1450,88 @@ mod tests {
         assert!(validate_channel("latest").is_err());
         assert!(validate_version("0.1.2-alpha.2").is_ok());
         assert!(validate_version("../../escape").is_err());
+    }
+
+    #[test]
+    fn new_install_uses_local_app_data_even_when_a_d_drive_path_is_available() {
+        let local = PathBuf::from(r"C:\Users\测试 用户\AppData\Local\DSH Launcher\runtime");
+        let legacy = Path::new(LEGACY_RUNTIME_ROOT);
+        assert_eq!(
+            select_default_root(None, local.clone(), legacy, false),
+            local
+        );
+    }
+
+    #[test]
+    fn existing_legacy_install_is_preserved_and_explicit_configuration_wins() {
+        let local = PathBuf::from(r"C:\Users\User Name\AppData\Local\DSH Launcher\runtime");
+        let legacy = Path::new(LEGACY_RUNTIME_ROOT);
+        let configured = PathBuf::from(r"E:\自定义目录\DSH Runtime");
+        assert_eq!(
+            select_default_root(None, local.clone(), legacy, true),
+            legacy
+        );
+        assert_eq!(
+            select_default_root(Some(configured.clone()), local, legacy, true),
+            configured
+        );
+    }
+
+    #[test]
+    fn detects_only_real_legacy_runtime_markers() {
+        let root = temporary_root("legacy-detection-中文 路径");
+        fs::create_dir_all(&root).expect("test root");
+        assert!(!legacy_runtime_install_exists(&root));
+        fs::create_dir_all(root.join("versions/dsh-test")).expect("version root");
+        fs::write(root.join("versions/dsh-test/runtime.json"), b"{}").expect("runtime marker");
+        assert!(legacy_runtime_install_exists(&root));
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn classifies_supported_desktop_windows_versions() {
+        assert_eq!(
+            classify_windows_version(10, 0, 19_045, false),
+            (true, "Windows 10 · build 19045".to_string())
+        );
+        assert_eq!(
+            classify_windows_version(10, 0, 26_100, false),
+            (true, "Windows 11 · build 26100".to_string())
+        );
+        assert!(!classify_windows_version(6, 3, 9_600, false).0);
+        assert!(!classify_windows_version(10, 0, 20_348, true).0);
+    }
+
+    #[test]
+    fn rejects_missing_or_zero_webview2_versions() {
+        assert!(usable_webview2_version("125.0.2535.51"));
+        assert!(!usable_webview2_version(""));
+        assert!(!usable_webview2_version("0.0.0.0"));
+        assert!(!usable_webview2_version("not-a-version"));
+    }
+
+    #[test]
+    fn validates_first_run_directory_inputs() {
+        assert!(validate_user_directory("Runtime 目录", r"C:\Users\测试 用户\DSH Runtime").is_ok());
+        assert!(validate_user_directory("Runtime 目录", "relative\\runtime").is_err());
+        assert!(validate_user_directory("Runtime 目录", r"C:\").is_err());
+        assert!(validate_user_directory("Runtime 目录", "  ").is_err());
+    }
+
+    #[test]
+    fn launcher_settings_round_trip_preserves_unicode_paths() {
+        let root = temporary_root("settings-中文 路径");
+        let path = root.join("settings.json");
+        let expected = LauncherSettings {
+            schema_version: 1,
+            runtime_root: Some(r"D:\应用\DSH Runtime".to_string()),
+            cache_root: Some(r"D:\缓存\DSH Launcher".to_string()),
+            dsh_home: Some(r"D:\数据\DSH Home".to_string()),
+            workspace: Some(r"D:\工作区\项目".to_string()),
+        };
+        atomic_write_json(&path, &expected).expect("write settings");
+        assert_eq!(load_launcher_settings(&path).unwrap(), expected);
+        fs::remove_dir_all(root).expect("cleanup settings test");
     }
 
     #[test]

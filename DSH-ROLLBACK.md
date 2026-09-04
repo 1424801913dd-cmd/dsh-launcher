@@ -1,5 +1,9 @@
 # DeepSeek Harness rollback notes
 
+> Legacy note: this file describes the pre-managed D-drive installation only. New DSH Launcher installations use the current
+> user's `LOCALAPPDATA` directories, while an existing legacy installation is preserved in place. Do not apply the paths below
+> to a new installation.
+
 The desktop launcher currently targets DSH `0.1.1-rc.2`.
 
 Runtime packages are intentionally not stored in Git. They contain tens of

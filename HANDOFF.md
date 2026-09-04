@@ -1215,3 +1215,113 @@ Authenticode、干净虚拟机和发布验收完成前，不得把本地 `0.4.0`
   -RequireLicenseReview` 硬闸门按预期以退出码 1 拒绝（license-obligations-review FAIL 与
   未签名 FAIL），报告 `phase4-results/release-gate-lgpl-review.json`；
 - `docs/LGPL_REVIEW.md` 已加入 `phase4-check.ps1` 发布文档清单。
+
+## 二十三、产品化第一步：跨机器运行基础（2026-09-04）
+
+本节是当前产品化工作的最新基线；前文涉及“新安装优先 D 盘”或 WebView2 固定通过的描述仅保留为历史记录。
+
+### 1. 用户级默认目录与早期安装兼容
+
+- 全新安装不再因为电脑存在可写 D 盘就创建 `D:\Tools\dsh-launcher` 或 `D:\Caches\dsh-launcher`；
+- 新 Runtime 与缓存默认分别位于 `%LOCALAPPDATA%\DSH Launcher\runtime` 和
+  `%LOCALAPPDATA%\DSH Launcher\cache`，新 DSH_HOME 默认位于
+  `%LOCALAPPDATA%\DeepSeek Harness\home`；
+- 只有 `D:\Tools\dsh-launcher` 已存在 `active.json`、`previous.json` 或版本目录下的 `runtime.json` 时，
+  才继续选择早期 Runtime 根目录；原缓存目录存在时同步沿用；
+- 现有 `D:\Caches\deepseek-harness\home` 和 `D:\Bian_CHENG\dsmax` 只在目录真实存在时兼容复用，启动器
+  不会为了探测而创建它们；
+- `DSH_LAUNCHER_RUNTIME_ROOT` 与 `DSH_LAUNCHER_CACHE_ROOT` 显式配置仍具有最高优先级；
+- `LOCALAPPDATA` 异常缺失时先回退到当前用户的 `USERPROFILE\AppData\Local`，不再写入公共用户目录。
+
+### 2. 真实系统与 WebView2 预检
+
+- Windows 版本通过 `RtlGetVersion` 获取，Windows 10 build 10240 及以上和 Windows 11 桌面版标记为支持，
+  Windows Server 与旧版 Windows 标记为不支持；
+- WebView2 Evergreen Runtime 通过 EdgeUpdate 的当前用户/本机、32 位/64 位注册表视图读取产品版本
+  `{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}`，空值、无效版本和 `0.0.0.0` 均不再视为可用；
+- 首次安装界面显示检测到的 Windows 名称/build 和 WebView2 精确版本；缺失时阻止开始 Runtime 安装；
+- 初始前端快照改为保守的“不支持/未检测”，避免后端首份真实快照到达前短暂显示错误的绿色状态。
+
+### 3. 当前验证
+
+- 新增测试覆盖：存在 D 盘但没有旧安装时选择用户目录、真实旧安装保持原位、显式目录覆盖优先、中文与
+  空格路径、旧安装标记识别、Windows 10/11/Server 分类，以及 WebView2 版本有效性；
+- `cargo test`：27 项通过、0 项失败、3 项真实环境测试按设计忽略；
+- 本机 WebView2 注册表版本为 `152.0.4191.53`；
+- 当前 `D:\Tools\dsh-launcher\active.json` 与 `previous.json` 均存在，因此本机升级后仍会选择原 D 盘目录，
+  本次修改没有迁移或删除现有 Runtime、缓存、备份或 DSH_HOME。
+
+## 二十四、产品化第二步：首次使用闭环（2026-09-04）
+
+### 1. 三步首次安装向导
+
+- 首次安装不再永久显示“1 / 3”，而是按状态进入环境与目录确认、下载/校验、启动 DSH 三个步骤；
+- 安装成功后向导保持在第三步，直到 DSH 启动并通过健康检查，用户再打开界面或主动结束向导；
+- 安装失败会回到可重试状态，并明确说明网络、代理、防火墙、registry 与磁盘空间检查方向；已安装
+  Runtime 仍可离线启动。
+
+### 2. 首次安装路径设置
+
+- 新增用户级 `%LOCALAPPDATA%\DSH Launcher\settings.json`，可记录 Runtime、缓存、DSH_HOME 与工作区；
+- 显式环境变量仍优先于设置文件，设置文件优先于新安装默认值和早期目录兼容探测；
+- 四个路径必须为非磁盘根的绝对目录，Runtime 与缓存不能相同；保存时创建目录，重启后生效；
+- 只有尚无活动 Runtime 且版本列表为空时允许保存，避免修改后让现有 Runtime 或用户数据失联；
+- 保存不执行迁移、复制或删除。已安装产品未来如需迁移路径，应另做带预检、回滚和断电恢复的迁移流程。
+
+### 3. 用户诊断与文档
+
+- 日志面板新增“打开日志目录”和“复制诊断摘要”；摘要包含环境、版本、状态和最近错误，不复制会话内容，
+  并将当前用户目录前缀替换为 `%USERPROFILE%` / `%LOCALAPPDATA%`；
+- `docs/USER_GUIDE.md` 记录首次使用、目录、日常操作、断网/npm/端口故障与当前未获 SignPath Foundation
+  批准的发布限制，并作为安装资源随包提供；
+- 本步骤没有迁移或删除本机现有 D 盘 Runtime、缓存和 DSH_HOME。
+
+## 二十五、产品化第三步：干净 Windows 验收（2026-09-04，进行中）
+
+### 1. 自动化入口
+
+- `scripts/clean-runtime-install.ps1` 在名称严格匹配 `clean-runtime-*` 的全新隔离目录执行推荐版从零安装，
+  使用独立 Runtime、缓存、DSH_HOME 和中文空格工作区；测试前后比较生产 `active.json` SHA-256，检查残留
+  `dsh-bridge.mjs` 进程，成功后才安全清理隔离目录；
+- 原忽略测试 `installs_recommended_runtime_from_scratch` 不再依赖固定的 `D:\Bian_CHENG\dsmax`，默认创建
+  隔离工作区，也可由 `DSH_LAUNCHER_TEST_WORKSPACE` 显式指定；
+- `scripts/test-installer.ps1 -LaunchSmoke` 在一次性环境中静默安装后真正启动已安装 EXE，使用隔离的
+  Runtime、缓存、DSH_HOME、设置文件和中文空格工作区，等待持久日志确认初始化并继续存活 3 秒，再
+  结束测试进程并卸载；安装资源检查已包含 `USER_GUIDE.md`；
+- 新增 `DSH_LAUNCHER_DSH_HOME`、`DSH_LAUNCHER_WORKSPACE` 与 `DSH_LAUNCHER_SETTINGS_PATH` 进程级覆盖，
+  仅用于受控部署和隔离验证，优先于用户设置及早期路径兼容；测试不再伪造 `LOCALAPPDATA` 或
+  `USERPROFILE`，保留真实 Windows 用户环境；
+- `scripts/test-launcher-startup.ps1` 可单独验证构建 EXE，安装器测试也复用此入口；失败时保留报告及日志；
+- `.github/workflows/phase4-installer.yml` 已接入从零 Runtime 安装、安装后启动 smoke、卸载和 JSON/日志
+  报告上传（失败也上传现有证据）。GitHub 托管 runner 是 Windows Server，只作为自动化证据，不计作 Windows 10/11 桌面验收。
+
+### 2. 桌面验收记录
+
+- `docs/WINDOWS_ACCEPTANCE.md` 定义 Windows 10/11 x64 的安装、三步向导、默认/中文自定义路径、断网重试、
+  端口冲突、启停、托盘、卸载数据保留和 SmartScreen 矩阵；
+- `scripts/collect-windows-acceptance.ps1` 只接受真实 Windows 桌面客户端，自动核对预期 Windows 代际，记录
+  build、WebView2、安装器 SHA-256、Authenticode 与人工观察；任一 `FAIL` 失败，任一 `NOT_RUN` 记为未完成；
+- 第三步只有一次性 runner、Windows 10 桌面和 Windows 11 桌面三份证据均通过后才能标记完成。
+
+### 3. 本机已完成证据
+
+- 2026-09-04 从零 Runtime 隔离实测通过，最新复测耗时 73.714 秒：Node 下载与 SHA-256、npm 安装与 integrity、
+  CLI/原生模块、隔离启动与真正停止均通过；残留受管进程为 0；
+- 中文空格工作区已覆盖（脚本用 Unicode 码点构造路径，避免 Windows PowerShell 5.1 将 UTF-8 无 BOM 源码误读为乱码）；
+  生产 `D:\Tools\dsh-launcher\active.json` 前后 SHA-256 均为
+  `98032014819D333CD8E84AA4319622F595A9E1529B7648B0ADCAC74F94F7CE43`，隔离测试目录已删除；报告为
+  `phase4-results\clean-runtime-install.json`；
+- 重新构建未签名 NSIS：2,165,744 字节，SHA-256
+  `2A0047BEA5DC344FF6A293BF7CFB2E1651C731C42613512ED861EEA99FB027C0`；
+- 实际启动测试发现并修复本地 EXE 启动即退出：基础 Tauri 配置缺少 `plugins.updater`，插件将 `null` 反序列化为
+  `Config` 失败，触发 `PluginInitialization("updater", ...)` panic。根因不是 WebView2；基础配置现提供空 endpoints/pubkey，
+  允许插件初始化但不启用在线更新，正式发布仍须由发布配置提供有效密钥和地址；
+- 新增配置反序列化回归测试；`scripts/check.ps1` 通过（Rust 库 30 通过、0 失败、3 忽略；另有 1 项真实进程崩溃测试按设计忽略）；
+- 修复后 Release EXE 真实初始化/存活检查通过，无启动器进程残留，生产活动指针不变；报告
+  `phase4-results/launcher-startup.json`，EXE SHA-256
+  `00505412E686C8E622EC070DA266DC68AFF32EF6FA070F2FD6D6987661834180`。
+  该证据只证明本机启动初始化，不代替干净机界面验收；
+- 宿主机存在同一应用标识的生产安装，按安全护栏未在宿主机执行安装/卸载 smoke。Windows 10/11 一次性
+  虚拟机报告仍待真实运行，因此第三步状态保持“进行中”。
+- `phase4-check.ps1 -RequireInstaller` 通过非签名检查，报告 `phase4-results/product-step3-quality.json`；
+  两个制品未签名及缺少证书仍为预期 WARN。安装器生产安装保护和启动 smoke 拒绝复用目录的保护已实际触发验证。
